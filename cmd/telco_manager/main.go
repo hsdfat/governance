@@ -1,13 +1,12 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
+	"github.com/chronnie/governance/internal/config"
 	"github.com/chronnie/governance/manager"
 	"github.com/chronnie/governance/models"
 	"github.com/chronnie/governance/storage/postgres"
@@ -17,17 +16,23 @@ func main() {
 	log.Println("Starting Telco Governance Manager")
 	log.Println("Managing lifecycle for: http-gw, diam-gw, and eir services")
 
-	// Database configuration from environment
+	// Load configuration
+	cfg, err := config.Load("")
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	// Database configuration
 	dbConfig := postgres.Config{
-		Host:            getEnv("DB_HOST", "localhost"),
-		Port:            getEnvInt("DB_PORT", 5432),
-		Database:        getEnv("DB_NAME", "governance_db"),
-		Username:        getEnv("DB_USER", "postgres"),
-		Password:        getEnv("DB_PASSWORD", "postgres"),
-		SSLMode:         getEnv("DB_SSL_MODE", "disable"),
-		MaxOpenConns:    25,
-		MaxIdleConns:    5,
-		ConnMaxLifetime: 5 * time.Minute,
+		Host:            cfg.Database.Host,
+		Port:            cfg.Database.Port,
+		Database:        cfg.Database.Database,
+		Username:        cfg.Database.Username,
+		Password:        cfg.Database.Password,
+		SSLMode:         cfg.Database.SSLMode,
+		MaxOpenConns:    cfg.Database.MaxOpenConns,
+		MaxIdleConns:    cfg.Database.MaxIdleConns,
+		ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
 	}
 
 	// Create PostgreSQL database store
@@ -37,18 +42,18 @@ func main() {
 	}
 
 	// Manager configuration
-	config := &models.ManagerConfig{
-		ServerPort:           getEnvInt("SERVER_PORT", 8080),
-		HealthCheckInterval:  getDurationEnv("HEALTH_CHECK_INTERVAL", 30*time.Second),
-		HealthCheckTimeout:   getDurationEnv("HEALTH_CHECK_TIMEOUT", 5*time.Second),
-		HealthCheckRetry:     getEnvInt("HEALTH_CHECK_RETRY", 3),
-		NotificationInterval: getDurationEnv("NOTIFICATION_INTERVAL", 60*time.Second),
-		NotificationTimeout:  getDurationEnv("NOTIFICATION_TIMEOUT", 5*time.Second),
-		EventQueueSize:       getEnvInt("EVENT_QUEUE_SIZE", 1000),
+	managerConfig := &models.ManagerConfig{
+		ServerPort:           cfg.Server.Port,
+		HealthCheckInterval:  cfg.Manager.HealthCheckInterval,
+		HealthCheckTimeout:   cfg.Manager.HealthCheckTimeout,
+		HealthCheckRetry:     cfg.Manager.HealthCheckRetry,
+		NotificationInterval: cfg.Manager.NotificationInterval,
+		NotificationTimeout:  cfg.Manager.NotificationTimeout,
+		EventQueueSize:       cfg.Manager.EventQueueSize,
 	}
 
 	// Create and start manager with database persistence
-	mgr := manager.NewManagerWithDatabase(config, db)
+	mgr := manager.NewManagerWithDatabase(managerConfig, db)
 	if err := mgr.Start(); err != nil {
 		log.Fatalf("Failed to start manager: %v", err)
 	}
@@ -58,10 +63,16 @@ func main() {
 	log.Println("========================================")
 
 	log.Println("\nAPI Endpoints:")
-	log.Printf("  POST   http://localhost:%d/register\n", config.ServerPort)
-	log.Printf("  DELETE http://localhost:%d/unregister\n", config.ServerPort)
-	log.Printf("  GET    http://localhost:%d/services\n", config.ServerPort)
-	log.Printf("  GET    http://localhost:%d/health\n", config.ServerPort)
+	log.Printf("  POST   http://localhost:%d/register\n", cfg.Server.Port)
+	log.Printf("  DELETE http://localhost:%d/unregister\n", cfg.Server.Port)
+	log.Printf("  GET    http://localhost:%d/services\n", cfg.Server.Port)
+	log.Printf("  GET    http://localhost:%d/health\n", cfg.Server.Port)
+
+	log.Println("\nConfiguration:")
+	log.Printf("  Database: %s@%s:%d/%s\n", cfg.Database.Username, cfg.Database.Host, cfg.Database.Port, cfg.Database.Database)
+	log.Printf("  Health Check: interval=%s timeout=%s retry=%d\n", cfg.Manager.HealthCheckInterval, cfg.Manager.HealthCheckTimeout, cfg.Manager.HealthCheckRetry)
+	log.Printf("  Notification: interval=%s timeout=%s\n", cfg.Manager.NotificationInterval, cfg.Manager.NotificationTimeout)
+	log.Printf("  Logging: level=%s format=%s\n", cfg.Logging.Level, cfg.Logging.Format)
 
 	log.Println("\nPress Ctrl+C to stop...")
 
@@ -77,30 +88,4 @@ func main() {
 	}
 
 	log.Println("Stopped successfully")
-}
-
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-func getEnvInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		var intValue int
-		if _, err := fmt.Sscanf(value, "%d", &intValue); err == nil {
-			return intValue
-		}
-	}
-	return defaultValue
-}
-
-func getDurationEnv(key string, defaultValue time.Duration) time.Duration {
-	if value := os.Getenv(key); value != "" {
-		if duration, err := time.ParseDuration(value); err == nil {
-			return duration
-		}
-	}
-	return defaultValue
 }

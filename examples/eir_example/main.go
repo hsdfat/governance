@@ -13,14 +13,15 @@ import (
 )
 
 func main() {
-	log.Println("Starting service example...")
+	log.Println("Starting EIR service example with multiple providers...")
 
 	// Configuration (normally would come from environment variables)
 	managerURL := "http://localhost:8080"
-	serviceName := "user-service"
-	podName := "user-service-pod-1"
-	podIP := "192.168.1.10"
-	httpPort := 9001
+	serviceName := "eir-service"
+	podName := "eir-pod-1"
+	podIP := "192.168.1.20"
+	httpPort := 8080
+	diameterPort := 3868
 
 	// Create governance client
 	govClient := client.NewClient(&client.ClientConfig{
@@ -38,17 +39,9 @@ func main() {
 		for _, pod := range payload.Pods {
 			log.Printf("     - Pod: %s, Status: %s, Providers: %d",
 				pod.PodName, pod.Status, len(pod.Providers))
-		}
-
-		// Demonstrate accessing stored pod info
-		log.Printf("\n===> Current stored pod info after notification:")
-		if payload.ServiceName == serviceName {
-			ownPods := govClient.GetOwnPods()
-			log.Printf("     Own service pods: %d", len(ownPods))
-		} else {
-			subscribedPods, exists := govClient.GetSubscribedServicePods(payload.ServiceName)
-			if exists {
-				log.Printf("     Subscribed service '%s' pods: %d", payload.ServiceName, len(subscribedPods))
+			for _, provider := range pod.Providers {
+				log.Printf("       * Provider: %s (%s) at %s:%d",
+					provider.ProviderID, provider.Protocol, provider.IP, provider.Port)
 			}
 		}
 	}
@@ -67,13 +60,19 @@ func main() {
 	// Wait a bit for server to start
 	time.Sleep(1 * time.Second)
 
-	// Register this service with the manager
+	// Register EIR service with MULTIPLE providers (diameter + HTTP)
 	registration := &models.ServiceRegistration{
 		ServiceName: serviceName,
 		PodName:     podName,
 		Providers: []models.ProviderInfo{
 			{
-				ProviderID: string(models.ProviderHTTP), // Using predefined constant
+				ProviderID: string(models.ProviderEIRDiameter), // Diameter interface
+				Protocol:   models.ProtocolTCP,
+				IP:         podIP,
+				Port:       diameterPort,
+			},
+			{
+				ProviderID: string(models.ProviderEIRHTTP), // HTTP API interface
 				Protocol:   models.ProtocolHTTP,
 				IP:         podIP,
 				Port:       httpPort,
@@ -82,8 +81,13 @@ func main() {
 		HealthCheckURL:  notifServer.GetHealthCheckURL(podIP),
 		NotificationURL: notifServer.GetNotificationURL(podIP),
 		Subscriptions: []models.Subscription{
-			{ServiceName: "order-service"},   // Subscribe to all providers
-			{ServiceName: "payment-service"}, // Subscribe to all providers
+			{
+				ServiceName: "smf-service",
+				ProviderIDs: []string{string(models.ProviderSMFPFCP)}, // Only subscribe to PFCP endpoints
+			},
+			{
+				ServiceName: "upf-service", // Subscribe to all UPF providers
+			},
 		},
 	}
 
@@ -92,59 +96,77 @@ func main() {
 		log.Fatalf("Failed to register: %v", err)
 	}
 
-	log.Printf("Service registered successfully!")
+	log.Printf("EIR Service registered successfully!")
 	log.Printf("  - Service: %s", serviceName)
 	log.Printf("  - Pod: %s", podName)
+	log.Printf("  - Providers:")
+	for _, p := range registration.Providers {
+		log.Printf("    * %s (%s) at %s:%d", p.ProviderID, p.Protocol, p.IP, p.Port)
+	}
 	log.Printf("  - Health Check URL: %s", registration.HealthCheckURL)
 	log.Printf("  - Notification URL: %s", registration.NotificationURL)
-	log.Printf("  - Subscriptions: %v", registration.Subscriptions)
+	log.Printf("  - Subscriptions:")
+	for _, sub := range registration.Subscriptions {
+		if len(sub.ProviderIDs) > 0 {
+			log.Printf("    * %s (providers: %v)", sub.ServiceName, sub.ProviderIDs)
+		} else {
+			log.Printf("    * %s (all providers)", sub.ServiceName)
+		}
+	}
+
 	log.Printf("\nPods for service '%s': %d", resp.ServiceName, len(resp.Pods))
 	for _, pod := range resp.Pods {
 		log.Printf("  * Pod: %s, Status: %s, Providers: %d",
 			pod.PodName, pod.Status, len(pod.Providers))
+		for _, provider := range pod.Providers {
+			log.Printf("    - %s (%s) at %s:%d",
+				provider.ProviderID, provider.Protocol, provider.IP, provider.Port)
+		}
 	}
 
 	if len(resp.SubscribedServices) > 0 {
 		log.Printf("\nSubscribed Services (received current pod info):")
-		for serviceName, pods := range resp.SubscribedServices {
-			log.Printf("  - %s: %d pods", serviceName, len(pods))
+		for svcName, pods := range resp.SubscribedServices {
+			log.Printf("  - %s: %d pods", svcName, len(pods))
 			for _, pod := range pods {
 				log.Printf("      * Pod: %s, Status: %s, Providers: %d",
 					pod.PodName, pod.Status, len(pod.Providers))
+				for _, provider := range pod.Providers {
+					log.Printf("        - %s (%s) at %s:%d",
+						provider.ProviderID, provider.Protocol, provider.IP, provider.Port)
+				}
 			}
 		}
 	} else {
 		log.Printf("\nNo active pods found for subscribed services yet")
 	}
 
-	// Demonstrate accessing stored pod info at any time
-	log.Printf("\n=== Demonstrating Pod Info Access ===")
+	// Demonstrate provider-specific endpoint queries
+	log.Printf("\n=== Demonstrating Provider-Specific Queries ===")
 
-	// Access own service pods
-	ownPods := govClient.GetOwnPods()
-	log.Printf("\nAccessing own pods via GetOwnPods():")
-	log.Printf("  Found %d pods for service '%s'", len(ownPods), serviceName)
-	for _, pod := range ownPods {
-		log.Printf("    - %s [%s]", pod.PodName, pod.Status)
-	}
-
-	// Access specific subscribed service
-	if pods, exists := govClient.GetSubscribedServicePods("order-service"); exists {
-		log.Printf("\nAccessing subscribed service via GetSubscribedServicePods('order-service'):")
-		log.Printf("  Found %d pods for 'order-service'", len(pods))
-		for _, pod := range pods {
-			log.Printf("    - %s [%s]", pod.PodName, pod.Status)
+	// Get specific provider endpoints from SMF (PFCP only, as subscribed)
+	if smfPfcpEndpoints := govClient.GetProviderEndpoints("smf-service", string(models.ProviderSMFPFCP)); len(smfPfcpEndpoints) > 0 {
+		log.Printf("\nSMF PFCP Endpoints (filtered subscription):")
+		for _, ep := range smfPfcpEndpoints {
+			log.Printf("  - Pod: %s, Provider: %s, %s://%s:%d [%s]",
+				ep.PodName, ep.ProviderID, ep.Protocol, ep.IP, ep.Port, ep.Status)
 		}
 	} else {
-		log.Printf("\nNo pods found for 'order-service' (service may not be registered yet)")
+		log.Printf("\nNo SMF PFCP endpoints available yet")
 	}
 
-	// Access all subscribed services
-	allSubscribed := govClient.GetAllSubscribedServices()
-	log.Printf("\nAccessing all subscribed services via GetAllSubscribedServices():")
-	log.Printf("  Total subscribed services with active pods: %d", len(allSubscribed))
-	for svcName, pods := range allSubscribed {
-		log.Printf("    - %s: %d pods", svcName, len(pods))
+	// Get all provider endpoints from UPF
+	if upfEndpoints := govClient.GetAllProviderEndpoints("upf-service"); len(upfEndpoints) > 0 {
+		log.Printf("\nUPF All Provider Endpoints:")
+		for providerID, endpoints := range upfEndpoints {
+			log.Printf("  Provider: %s", providerID)
+			for _, ep := range endpoints {
+				log.Printf("    - Pod: %s, %s://%s:%d [%s]",
+					ep.PodName, ep.Protocol, ep.IP, ep.Port, ep.Status)
+			}
+		}
+	} else {
+		log.Printf("\nNo UPF endpoints available yet")
 	}
 
 	log.Printf("\n=== Pod Info will be automatically updated when notifications arrive ===\n")
@@ -155,13 +177,13 @@ func main() {
 
 	<-sigChan
 
-	log.Println("Shutting down service...")
+	log.Println("Shutting down EIR service...")
 
 	// Unregister from manager
 	if err := govClient.Unregister(); err != nil {
 		log.Printf("Failed to unregister: %v", err)
 	} else {
-		log.Println("Service unregistered successfully")
+		log.Println("EIR Service unregistered successfully")
 	}
 
 	// Stop notification server
@@ -172,5 +194,5 @@ func main() {
 		log.Printf("Failed to stop notification server: %v", err)
 	}
 
-	log.Println("Service stopped successfully")
+	log.Println("EIR Service stopped successfully")
 }

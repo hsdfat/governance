@@ -90,13 +90,18 @@ func (w *EventWorker) handleRegister(ctx context.Context, event eventqueue.IEven
 		// Build subscribed services map
 		subscribedServices := make(map[string][]models.PodInfo)
 		if len(registerEvent.Registration.Subscriptions) > 0 {
+			// Convert subscriptions to service names for logging
+			subNames := make([]string, len(registerEvent.Registration.Subscriptions))
+			for i, sub := range registerEvent.Registration.Subscriptions {
+				subNames[i] = sub.ServiceName
+			}
 			logger.Debug("Collecting subscribed services pod info",
 				zap.String("service_key", serviceInfo.GetKey()),
-				zap.Strings("subscriptions", registerEvent.Registration.Subscriptions),
+				zap.Strings("subscriptions", subNames),
 			)
 
-			for _, subscribedServiceName := range registerEvent.Registration.Subscriptions {
-				pods := w.registry.GetByServiceName(subscribedServiceName)
+			for _, sub := range registerEvent.Registration.Subscriptions {
+				pods := w.registry.GetByServiceName(sub.ServiceName)
 				if len(pods) > 0 {
 					podList := make([]models.PodInfo, 0, len(pods))
 					for _, pod := range pods {
@@ -106,14 +111,14 @@ func (w *EventWorker) handleRegister(ctx context.Context, event eventqueue.IEven
 							Providers: pod.Providers,
 						})
 					}
-					subscribedServices[subscribedServiceName] = podList
+					subscribedServices[sub.ServiceName] = podList
 					logger.Debug("Collected subscribed service pods",
-						zap.String("subscribed_service", subscribedServiceName),
+						zap.String("subscribed_service", sub.ServiceName),
 						zap.Int("pod_count", len(podList)),
 					)
 				} else {
 					logger.Debug("No pods found for subscribed service",
-						zap.String("subscribed_service", subscribedServiceName),
+						zap.String("subscribed_service", sub.ServiceName),
 					)
 				}
 			}

@@ -118,6 +118,12 @@ func (d *DatabaseStore) createIndexes(ctx context.Context) error {
 
 // toServiceDoc converts ServiceInfo to serviceDoc
 func toServiceDoc(service *models.ServiceInfo) *serviceDoc {
+	// Convert Subscription structs to service names for storage
+	subNames := make([]string, len(service.Subscriptions))
+	for i, sub := range service.Subscriptions {
+		subNames[i] = sub.ServiceName
+	}
+
 	return &serviceDoc{
 		ServiceKey:      service.GetKey(),
 		ServiceName:     service.ServiceName,
@@ -125,7 +131,7 @@ func toServiceDoc(service *models.ServiceInfo) *serviceDoc {
 		Providers:       service.Providers,
 		HealthCheckURL:  service.HealthCheckURL,
 		NotificationURL: service.NotificationURL,
-		Subscriptions:   service.Subscriptions,
+		Subscriptions:   subNames,
 		Status:          service.Status,
 		LastHealthCheck: service.LastHealthCheck,
 		RegisteredAt:    service.RegisteredAt,
@@ -135,13 +141,19 @@ func toServiceDoc(service *models.ServiceInfo) *serviceDoc {
 
 // toServiceInfo converts serviceDoc to ServiceInfo
 func (doc *serviceDoc) toServiceInfo() *models.ServiceInfo {
+	// Convert service names back to Subscription structs
+	subs := make([]models.Subscription, len(doc.Subscriptions))
+	for i, serviceName := range doc.Subscriptions {
+		subs[i] = models.Subscription{ServiceName: serviceName}
+	}
+
 	return &models.ServiceInfo{
 		ServiceName:     doc.ServiceName,
 		PodName:         doc.PodName,
 		Providers:       doc.Providers,
 		HealthCheckURL:  doc.HealthCheckURL,
 		NotificationURL: doc.NotificationURL,
-		Subscriptions:   doc.Subscriptions,
+		Subscriptions:   subs,
 		Status:          doc.Status,
 		LastHealthCheck: doc.LastHealthCheck,
 		RegisteredAt:    doc.RegisteredAt,

@@ -119,11 +119,15 @@ func TestDefaultConfig(t *testing.T) {
 
 func TestProviderInfoStruct(t *testing.T) {
 	provider := ProviderInfo{
-		Protocol: ProtocolHTTP,
-		IP:       "192.168.1.10",
-		Port:     8080,
+		ProviderID: "test-http",
+		Protocol:   ProtocolHTTP,
+		IP:         "192.168.1.10",
+		Port:       8080,
 	}
 
+	if provider.ProviderID != "test-http" {
+		t.Errorf("Expected provider ID 'test-http', got '%s'", provider.ProviderID)
+	}
 	if provider.Protocol != ProtocolHTTP {
 		t.Errorf("Expected protocol 'http', got '%s'", provider.Protocol)
 	}
@@ -140,11 +144,14 @@ func TestServiceRegistrationStruct(t *testing.T) {
 		ServiceName: "test-service",
 		PodName:     "test-pod",
 		Providers: []ProviderInfo{
-			{Protocol: ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
+			{ProviderID: "test-http", Protocol: ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
 		},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
-		Subscriptions:   []string{"service-a", "service-b"},
+		Subscriptions: []Subscription{
+			{ServiceName: "service-a"},
+			{ServiceName: "service-b"},
+		},
 	}
 
 	if reg.ServiceName != "test-service" {
@@ -169,7 +176,7 @@ func TestNotificationPayloadStruct(t *testing.T) {
 				PodName: "pod-1",
 				Status:  StatusHealthy,
 				Providers: []ProviderInfo{
-					{Protocol: ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
+					{ProviderID: "test-http", Protocol: ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
 				},
 			},
 		},
@@ -197,7 +204,7 @@ func TestPodInfoStruct(t *testing.T) {
 		PodName: "test-pod",
 		Status:  StatusHealthy,
 		Providers: []ProviderInfo{
-			{Protocol: ProtocolTCP, IP: "10.0.0.1", Port: 3000},
+			{ProviderID: "test-tcp", Protocol: ProtocolTCP, IP: "10.0.0.1", Port: 3000},
 		},
 	}
 
@@ -209,5 +216,41 @@ func TestPodInfoStruct(t *testing.T) {
 	}
 	if len(podInfo.Providers) != 1 {
 		t.Error("Providers length mismatch")
+	}
+}
+
+func TestPodInfoFilterProviders(t *testing.T) {
+	podInfo := PodInfo{
+		PodName: "test-pod",
+		Status:  StatusHealthy,
+		Providers: []ProviderInfo{
+			{ProviderID: "eir-diameter", Protocol: ProtocolTCP, IP: "10.0.0.1", Port: 3868},
+			{ProviderID: "eir-http", Protocol: ProtocolHTTP, IP: "10.0.0.1", Port: 8080},
+			{ProviderID: "eir-radius", Protocol: ProtocolUDP, IP: "10.0.0.1", Port: 1812},
+		},
+	}
+
+	// Test filtering with specific provider IDs
+	filtered := podInfo.FilterProviders([]string{"eir-diameter", "eir-http"})
+	if len(filtered.Providers) != 2 {
+		t.Errorf("Expected 2 providers after filtering, got %d", len(filtered.Providers))
+	}
+	if filtered.Providers[0].ProviderID != "eir-diameter" {
+		t.Errorf("Expected first provider to be 'eir-diameter', got '%s'", filtered.Providers[0].ProviderID)
+	}
+	if filtered.Providers[1].ProviderID != "eir-http" {
+		t.Errorf("Expected second provider to be 'eir-http', got '%s'", filtered.Providers[1].ProviderID)
+	}
+
+	// Test filtering with empty list (should return all)
+	filteredAll := podInfo.FilterProviders([]string{})
+	if len(filteredAll.Providers) != 3 {
+		t.Errorf("Expected 3 providers when no filter, got %d", len(filteredAll.Providers))
+	}
+
+	// Test filtering with non-existent provider
+	filteredNone := podInfo.FilterProviders([]string{"non-existent"})
+	if len(filteredNone.Providers) != 0 {
+		t.Errorf("Expected 0 providers for non-existent filter, got %d", len(filteredNone.Providers))
 	}
 }

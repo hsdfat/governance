@@ -39,11 +39,11 @@ func TestRegisterHandlerSuccess(t *testing.T) {
 		ServiceName: "test-service",
 		PodName:     "test-pod-1",
 		Providers: []models.ProviderInfo{
-			{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
+			{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
 		},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
-		Subscriptions:   []string{"other-service"},
+		Subscriptions: []models.Subscription{{ServiceName: "other-service"}},
 	}
 
 	jsonData, _ := json.Marshal(registration)
@@ -85,7 +85,7 @@ func TestRegisterHandlerMissingServiceName(t *testing.T) {
 	registration := &models.ServiceRegistration{
 		PodName: "test-pod-1",
 		Providers: []models.ProviderInfo{
-			{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
+			{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
 		},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
@@ -185,10 +185,10 @@ func TestServicesHandler(t *testing.T) {
 		registration := &models.ServiceRegistration{
 			ServiceName:     "test-service",
 			PodName:         "pod-" + string(rune('0'+i)),
-			Providers:       []models.ProviderInfo{{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
+			Providers:       []models.ProviderInfo{{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
 			HealthCheckURL:  "http://192.168.1.10:8080/health",
 			NotificationURL: "http://192.168.1.10:8080/notify",
-			Subscriptions:   []string{},
+			Subscriptions: []models.Subscription{},
 		}
 		reg.Register(registration)
 	}
@@ -255,11 +255,11 @@ func TestValidateRegistration(t *testing.T) {
 		ServiceName: "test-service",
 		PodName:     "test-pod-1",
 		Providers: []models.ProviderInfo{
-			{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
+			{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
 		},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
-		Subscriptions:   []string{},
+		Subscriptions: []models.Subscription{},
 	}
 
 	err := handler.validateRegistration(validReg)
@@ -271,7 +271,7 @@ func TestValidateRegistration(t *testing.T) {
 	invalidReg := &models.ServiceRegistration{
 		PodName: "test-pod-1",
 		Providers: []models.ProviderInfo{
-			{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
+			{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
 		},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
@@ -285,7 +285,7 @@ func TestValidateRegistration(t *testing.T) {
 	invalidReg = &models.ServiceRegistration{
 		ServiceName: "test-service",
 		Providers: []models.ProviderInfo{
-			{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
+			{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
 		},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
@@ -313,7 +313,7 @@ func TestValidateRegistration(t *testing.T) {
 		ServiceName: "test-service",
 		PodName:     "test-pod-1",
 		Providers: []models.ProviderInfo{
-			{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 99999},
+			{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 99999},
 		},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",

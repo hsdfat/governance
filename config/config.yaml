@@ -1,0 +1,26 @@
+# Governance Manager Configuration
+# This file overrides defaults from config.default.yaml
+# Environment variables with GOV_ prefix override these values
+
+server:
+  port: 8080
+
+database:
+  host: 14.225.198.206
+  port: 5432
+  database: eir
+  username: adong
+  password: adong123
+  sslMode: disable
+
+manager:
+  healthCheckInterval: 30s
+  healthCheckTimeout: 5s
+  healthCheckRetry: 3
+  notificationInterval: 60s
+  notificationTimeout: 5s
+  eventQueueSize: 1000
+
+logging:
+  level: info
+  format: text

@@ -54,7 +54,7 @@ func (m *ThreadSafeMemoryStore) SaveService(ctx context.Context, service *models
 		copy(serviceCopy.Providers, service.Providers)
 	}
 	if service.Subscriptions != nil {
-		serviceCopy.Subscriptions = make([]string, len(service.Subscriptions))
+		serviceCopy.Subscriptions = make([]models.Subscription, len(service.Subscriptions))
 		copy(serviceCopy.Subscriptions, service.Subscriptions)
 	}
 
@@ -305,7 +305,7 @@ func (m *ThreadSafeMemoryStore) deepCopyService(service *models.ServiceInfo) *mo
 
 	// Deep copy Subscriptions slice
 	if service.Subscriptions != nil {
-		serviceCopy.Subscriptions = make([]string, len(service.Subscriptions))
+		serviceCopy.Subscriptions = make([]models.Subscription, len(service.Subscriptions))
 		copy(serviceCopy.Subscriptions, service.Subscriptions)
 	}
 

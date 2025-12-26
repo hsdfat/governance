@@ -22,7 +22,7 @@ func createTestService(serviceName, podName string, status models.ServiceStatus)
 		},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
-		Subscriptions:   []string{"service-a", "service-b"},
+		Subscriptions: []models.Subscription{{ServiceName: "service-a"}, {ServiceName: "service-b"}},
 		Status:          status,
 		LastHealthCheck: time.Now(),
 		RegisteredAt:    time.Now(),
@@ -345,7 +345,7 @@ func TestThreadSafeMemoryStore_DeepCopy(t *testing.T) {
 	// Modify retrieved service
 	retrieved.ServiceName = "modified"
 	retrieved.Providers[0].Port = 9999
-	retrieved.Subscriptions[0] = "modified-subscription"
+	retrieved.Subscriptions[0] = models.Subscription{ServiceName: "modified-subscription"}
 
 	// Get service again
 	retrieved2, _ := store.GetService(ctx, "test-service:pod-1")
@@ -357,7 +357,7 @@ func TestThreadSafeMemoryStore_DeepCopy(t *testing.T) {
 	if retrieved2.Providers[0].Port != 8080 {
 		t.Error("Deep copy failed: provider was modified")
 	}
-	if retrieved2.Subscriptions[0] != "service-a" {
+	if retrieved2.Subscriptions[0].ServiceName != "service-a" {
 		t.Error("Deep copy failed: subscription was modified")
 	}
 }

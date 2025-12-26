@@ -68,7 +68,7 @@ func simulateRegistrations(mgr *manager.Manager) {
 		},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
-		Subscriptions:   []string{"order-service"},
+		Subscriptions: []models.Subscription{{ServiceName: "order-service"}},
 	})
 
 	registry.Register(&models.ServiceRegistration{
@@ -79,7 +79,7 @@ func simulateRegistrations(mgr *manager.Manager) {
 		},
 		HealthCheckURL:  "http://192.168.1.11:8080/health",
 		NotificationURL: "http://192.168.1.11:8080/notify",
-		Subscriptions:   []string{"order-service"},
+		Subscriptions: []models.Subscription{{ServiceName: "order-service"}},
 	})
 
 	// Register order-service pods
@@ -92,7 +92,7 @@ func simulateRegistrations(mgr *manager.Manager) {
 		},
 		HealthCheckURL:  "http://192.168.1.20:8080/health",
 		NotificationURL: "http://192.168.1.20:8080/notify",
-		Subscriptions:   []string{"payment-service"},
+		Subscriptions: []models.Subscription{{ServiceName: "payment-service"}},
 	})
 
 	registry.Register(&models.ServiceRegistration{
@@ -104,7 +104,7 @@ func simulateRegistrations(mgr *manager.Manager) {
 		},
 		HealthCheckURL:  "http://192.168.1.21:8080/health",
 		NotificationURL: "http://192.168.1.21:8080/notify",
-		Subscriptions:   []string{"payment-service"},
+		Subscriptions: []models.Subscription{{ServiceName: "payment-service"}},
 	})
 
 	registry.Register(&models.ServiceRegistration{
@@ -116,7 +116,7 @@ func simulateRegistrations(mgr *manager.Manager) {
 		},
 		HealthCheckURL:  "http://192.168.1.22:8080/health",
 		NotificationURL: "http://192.168.1.22:8080/notify",
-		Subscriptions:   []string{"payment-service"},
+		Subscriptions: []models.Subscription{{ServiceName: "payment-service"}},
 	})
 
 	// Register payment-service pod
@@ -128,7 +128,7 @@ func simulateRegistrations(mgr *manager.Manager) {
 		},
 		HealthCheckURL:  "http://192.168.1.30:8080/health",
 		NotificationURL: "http://192.168.1.30:8080/notify",
-		Subscriptions:   []string{},
+		Subscriptions: []models.Subscription{},
 	})
 
 	fmt.Println("Registered services:")

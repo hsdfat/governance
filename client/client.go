@@ -195,6 +195,73 @@ func (c *Client) GetAllSubscribedServices() map[string][]models.PodInfo {
 	return result
 }
 
+// ProviderEndpoint represents a specific provider endpoint
+type ProviderEndpoint struct {
+	PodName    string
+	ProviderID string
+	Protocol   models.Protocol
+	IP         string
+	Port       int
+	Status     models.ServiceStatus
+}
+
+// GetProviderEndpoints returns all endpoints for a specific provider ID from a subscribed service
+func (c *Client) GetProviderEndpoints(serviceName, providerID string) []ProviderEndpoint {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	pods, exists := c.subscribedServices[serviceName]
+	if !exists {
+		return []ProviderEndpoint{}
+	}
+
+	endpoints := make([]ProviderEndpoint, 0)
+	for _, pod := range pods {
+		for _, provider := range pod.Providers {
+			if provider.ProviderID == providerID {
+				endpoints = append(endpoints, ProviderEndpoint{
+					PodName:    pod.PodName,
+					ProviderID: provider.ProviderID,
+					Protocol:   provider.Protocol,
+					IP:         provider.IP,
+					Port:       provider.Port,
+					Status:     pod.Status,
+				})
+			}
+		}
+	}
+
+	return endpoints
+}
+
+// GetAllProviderEndpoints returns all endpoints for all provider IDs from a subscribed service
+func (c *Client) GetAllProviderEndpoints(serviceName string) map[string][]ProviderEndpoint {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	pods, exists := c.subscribedServices[serviceName]
+	if !exists {
+		return make(map[string][]ProviderEndpoint)
+	}
+
+	result := make(map[string][]ProviderEndpoint)
+	for _, pod := range pods {
+		for _, provider := range pod.Providers {
+			endpoint := ProviderEndpoint{
+				PodName:    pod.PodName,
+				ProviderID: provider.ProviderID,
+				Protocol:   provider.Protocol,
+				IP:         provider.IP,
+				Port:       provider.Port,
+				Status:     pod.Status,
+			}
+			result[provider.ProviderID] = append(result[provider.ProviderID], endpoint)
+		}
+	}
+
+	return result
+}
+
 // UpdatePodInfo updates the stored pod info (called internally when notifications are received)
 func (c *Client) UpdatePodInfo(serviceName string, pods []models.PodInfo) {
 	c.mu.Lock()

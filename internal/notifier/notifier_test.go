@@ -108,7 +108,7 @@ func TestBuildNotificationPayload(t *testing.T) {
 			PodName:     "pod-1",
 			Status:      models.StatusHealthy,
 			Providers: []models.ProviderInfo{
-				{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
+				{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
 			},
 		},
 		{
@@ -116,7 +116,7 @@ func TestBuildNotificationPayload(t *testing.T) {
 			PodName:     "pod-2",
 			Status:      models.StatusHealthy,
 			Providers: []models.ProviderInfo{
-				{Protocol: models.ProtocolHTTP, IP: "192.168.1.11", Port: 8080},
+				{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.11", Port: 8080},
 			},
 		},
 	}

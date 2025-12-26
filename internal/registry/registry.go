@@ -75,9 +75,14 @@ func (r *Registry) Register(reg *models.ServiceRegistration) *models.ServiceInfo
 
 	// Add new subscriptions
 	if len(reg.Subscriptions) > 0 {
+		// Convert subscriptions to service names for logging
+		subNames := make([]string, len(reg.Subscriptions))
+		for i, sub := range reg.Subscriptions {
+			subNames[i] = sub.ServiceName
+		}
 		logger.Debug("Registry: Adding subscriptions",
 			zap.String("service_key", key),
-			zap.Strings("subscriptions", reg.Subscriptions),
+			zap.Strings("subscriptions", subNames),
 		)
 		r.addSubscriptions(key, reg.Subscriptions)
 	}
@@ -228,36 +233,36 @@ func (r *Registry) GetSubscriberServices(serviceName string) []*models.ServiceIn
 }
 
 // addSubscriptions adds subscriptions for a service
-func (r *Registry) addSubscriptions(subscriberKey string, subscriptions []string) {
-	for _, serviceName := range subscriptions {
-		if err := r.store.AddSubscription(r.ctx, subscriberKey, serviceName); err != nil {
+func (r *Registry) addSubscriptions(subscriberKey string, subscriptions []models.Subscription) {
+	for _, sub := range subscriptions {
+		if err := r.store.AddSubscription(r.ctx, subscriberKey, sub.ServiceName); err != nil {
 			logger.Error("Registry: Failed to add subscription",
 				zap.String("subscriber_key", subscriberKey),
-				zap.String("service_name", serviceName),
+				zap.String("service_name", sub.ServiceName),
 				zap.Error(err),
 			)
 		} else {
 			logger.Debug("Registry: Subscription added",
 				zap.String("subscriber_key", subscriberKey),
-				zap.String("service_name", serviceName),
+				zap.String("service_name", sub.ServiceName),
 			)
 		}
 	}
 }
 
 // removeSubscriptions removes subscriptions for a service
-func (r *Registry) removeSubscriptions(subscriberKey string, subscriptions []string) {
-	for _, serviceName := range subscriptions {
-		if err := r.store.RemoveSubscription(r.ctx, subscriberKey, serviceName); err != nil {
+func (r *Registry) removeSubscriptions(subscriberKey string, subscriptions []models.Subscription) {
+	for _, sub := range subscriptions {
+		if err := r.store.RemoveSubscription(r.ctx, subscriberKey, sub.ServiceName); err != nil {
 			logger.Error("Registry: Failed to remove subscription",
 				zap.String("subscriber_key", subscriberKey),
-				zap.String("service_name", serviceName),
+				zap.String("service_name", sub.ServiceName),
 				zap.Error(err),
 			)
 		} else {
 			logger.Debug("Registry: Subscription removed",
 				zap.String("subscriber_key", subscriberKey),
-				zap.String("service_name", serviceName),
+				zap.String("service_name", sub.ServiceName),
 			)
 		}
 	}

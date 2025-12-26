@@ -13,11 +13,45 @@ const (
 	ProtocolUDP  Protocol = "udp"
 )
 
+// ProviderID represents common provider identifiers
+// Services can use these predefined constants or define custom provider IDs
+type ProviderID string
+
+const (
+	// EIR service providers
+	ProviderEIRDiameter ProviderID = "eir-diameter"
+	ProviderEIRHTTP     ProviderID = "eir-http"
+
+	// SMF service providers
+	ProviderSMFPFCP ProviderID = "smf-pfcp"
+	ProviderSMFHTTP ProviderID = "smf-http"
+
+	// UPF service providers
+	ProviderUPFPFCP ProviderID = "upf-pfcp"
+	ProviderUPFGTP  ProviderID = "upf-gtp"
+
+	// AMF service providers
+	ProviderAMFNGAP ProviderID = "amf-ngap"
+	ProviderAMFHTTP ProviderID = "amf-http"
+
+	// Generic providers (can be used by any service)
+	ProviderHTTP     ProviderID = "http"
+	ProviderDiameter ProviderID = "diameter"
+	ProviderRadius   ProviderID = "radius"
+)
+
 // ProviderInfo contains the endpoint information for a service provider
 type ProviderInfo struct {
-	Protocol Protocol `json:"protocol"`
-	IP       string   `json:"ip"`
-	Port     int      `json:"port"`
+	ProviderID string   `json:"provider_id"` // Globally unique identifier (e.g., "eir-diameter", "smf-pfcp")
+	Protocol   Protocol `json:"protocol"`
+	IP         string   `json:"ip"`
+	Port       int      `json:"port"`
+}
+
+// Subscription represents a subscription to a service with optional provider filtering
+type Subscription struct {
+	ServiceName string   `json:"service_name"`            // Service to subscribe to
+	ProviderIDs []string `json:"provider_ids,omitempty"`  // Optional: specific provider IDs to subscribe to (empty = all providers)
 }
 
 // ServiceRegistration represents a service registration request
@@ -27,7 +61,7 @@ type ServiceRegistration struct {
 	Providers        []ProviderInfo `json:"providers"`
 	HealthCheckURL   string         `json:"health_check_url"`
 	NotificationURL  string         `json:"notification_url"`
-	Subscriptions    []string       `json:"subscriptions"` // List of service groups to subscribe
+	Subscriptions    []Subscription `json:"subscriptions"` // List of service subscriptions with optional provider filtering
 }
 
 // ServiceStatus represents the health status of a service
@@ -46,7 +80,7 @@ type ServiceInfo struct {
 	Providers       []ProviderInfo
 	HealthCheckURL  string
 	NotificationURL string
-	Subscriptions   []string
+	Subscriptions   []Subscription
 	Status          ServiceStatus
 	LastHealthCheck time.Time
 	RegisteredAt    time.Time

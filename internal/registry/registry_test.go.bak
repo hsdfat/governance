@@ -27,11 +27,11 @@ func TestRegister(t *testing.T) {
 		ServiceName: "test-service",
 		PodName:     "test-pod-1",
 		Providers: []models.ProviderInfo{
-			{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
+			{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
 		},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
-		Subscriptions: []models.Subscription{{ServiceName: "other-service"}},
+		Subscriptions:   []string{"other-service"},
 	}
 
 	serviceInfo := reg.Register(registration)
@@ -75,10 +75,10 @@ func TestRegisterUpdate(t *testing.T) {
 	reg1 := &models.ServiceRegistration{
 		ServiceName:     "test-service",
 		PodName:         "test-pod-1",
-		Providers:       []models.ProviderInfo{{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
+		Providers:       []models.ProviderInfo{{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
-		Subscriptions: []models.Subscription{{ServiceName: "service-a"}},
+		Subscriptions:   []string{"service-a"},
 	}
 	reg.Register(reg1)
 
@@ -86,10 +86,10 @@ func TestRegisterUpdate(t *testing.T) {
 	reg2 := &models.ServiceRegistration{
 		ServiceName:     "test-service",
 		PodName:         "test-pod-1",
-		Providers:       []models.ProviderInfo{{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 9090}},
+		Providers:       []models.ProviderInfo{{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 9090}},
 		HealthCheckURL:  "http://192.168.1.10:9090/health",
 		NotificationURL: "http://192.168.1.10:9090/notify",
-		Subscriptions: []models.Subscription{{ServiceName: "service-b"}},
+		Subscriptions:   []string{"service-b"},
 	}
 	serviceInfo := reg.Register(reg2)
 
@@ -119,10 +119,10 @@ func TestUnregister(t *testing.T) {
 	registration := &models.ServiceRegistration{
 		ServiceName:     "test-service",
 		PodName:         "test-pod-1",
-		Providers:       []models.ProviderInfo{{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
+		Providers:       []models.ProviderInfo{{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
-		Subscriptions: []models.Subscription{{ServiceName: "other-service"}},
+		Subscriptions:   []string{"other-service"},
 	}
 	reg.Register(registration)
 
@@ -168,10 +168,10 @@ func TestGetByServiceName(t *testing.T) {
 		registration := &models.ServiceRegistration{
 			ServiceName:     "test-service",
 			PodName:         "test-pod-" + string(rune('0'+i)),
-			Providers:       []models.ProviderInfo{{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080 + i}},
+			Providers:       []models.ProviderInfo{{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080 + i}},
 			HealthCheckURL:  "http://192.168.1.10:8080/health",
 			NotificationURL: "http://192.168.1.10:8080/notify",
-			Subscriptions: []models.Subscription{},
+			Subscriptions:   []string{},
 		}
 		reg.Register(registration)
 	}
@@ -192,10 +192,10 @@ func TestGetAllServices(t *testing.T) {
 		registration := &models.ServiceRegistration{
 			ServiceName:     "service-" + string(rune('0'+i)),
 			PodName:         "pod-1",
-			Providers:       []models.ProviderInfo{{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
+			Providers:       []models.ProviderInfo{{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
 			HealthCheckURL:  "http://192.168.1.10:8080/health",
 			NotificationURL: "http://192.168.1.10:8080/notify",
-			Subscriptions: []models.Subscription{},
+			Subscriptions:   []string{},
 		}
 		reg.Register(registration)
 	}
@@ -214,10 +214,10 @@ func TestUpdateHealthStatus(t *testing.T) {
 	registration := &models.ServiceRegistration{
 		ServiceName:     "test-service",
 		PodName:         "test-pod-1",
-		Providers:       []models.ProviderInfo{{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
+		Providers:       []models.ProviderInfo{{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
-		Subscriptions: []models.Subscription{},
+		Subscriptions:   []string{},
 	}
 	reg.Register(registration)
 
@@ -266,10 +266,10 @@ func TestGetSubscriberServices(t *testing.T) {
 		registration := &models.ServiceRegistration{
 			ServiceName:     "subscriber-" + string(rune('0'+i)),
 			PodName:         "pod-1",
-			Providers:       []models.ProviderInfo{{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
+			Providers:       []models.ProviderInfo{{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
 			HealthCheckURL:  "http://192.168.1.10:8080/health",
 			NotificationURL: "http://192.168.1.10:8080/notify",
-			Subscriptions: []models.Subscription{{ServiceName: "target-service"}},
+			Subscriptions:   []string{"target-service"},
 		}
 		reg.Register(registration)
 	}
@@ -288,10 +288,10 @@ func TestMultipleSubscriptions(t *testing.T) {
 	registration := &models.ServiceRegistration{
 		ServiceName:     "subscriber-service",
 		PodName:         "pod-1",
-		Providers:       []models.ProviderInfo{{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
+		Providers:       []models.ProviderInfo{{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
-		Subscriptions: []models.Subscription{{ServiceName: "service-a"}, {ServiceName: "service-b"}, {ServiceName: "service-c"}},
+		Subscriptions:   []string{"service-a", "service-b", "service-c"},
 	}
 	reg.Register(registration)
 
@@ -329,10 +329,10 @@ func TestRegisteredAtTimestamp(t *testing.T) {
 	registration := &models.ServiceRegistration{
 		ServiceName:     "test-service",
 		PodName:         "test-pod-1",
-		Providers:       []models.ProviderInfo{{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
+		Providers:       []models.ProviderInfo{{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
-		Subscriptions: []models.Subscription{},
+		Subscriptions:   []string{},
 	}
 	serviceInfo := reg.Register(registration)
 	after := time.Now()

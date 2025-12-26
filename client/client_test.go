@@ -27,9 +27,10 @@ func createSamplePodInfo(podName string, status models.ServiceStatus) models.Pod
 		Status:  status,
 		Providers: []models.ProviderInfo{
 			{
-				Protocol: models.ProtocolHTTP,
-				IP:       "192.168.1.10",
-				Port:     8080,
+				ProviderID: "test-http",
+				Protocol:   models.ProtocolHTTP,
+				IP:         "192.168.1.10",
+				Port:       8080,
 			},
 		},
 	}
@@ -79,11 +80,14 @@ func TestClient_Register_StoresPodInfo(t *testing.T) {
 		ServiceName: "test-service",
 		PodName:     "test-pod-1",
 		Providers: []models.ProviderInfo{
-			{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
+			{ProviderID: "test-http", Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
 		},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
-		Subscriptions:   []string{"order-service", "payment-service"},
+		Subscriptions: []models.Subscription{
+			{ServiceName: "order-service"},
+			{ServiceName: "payment-service"},
+		},
 	}
 
 	resp, err := client.Register(registration)
@@ -143,7 +147,7 @@ func TestClient_Register_ErrorHandling(t *testing.T) {
 	registration := &models.ServiceRegistration{
 		PodName: "test-pod-1",
 		Providers: []models.ProviderInfo{
-			{Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
+			{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
 		},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",

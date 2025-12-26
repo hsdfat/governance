@@ -1,0 +1,25 @@
+server:
+  port: 8080
+
+database:
+  host: localhost
+  port: 5432
+  database: governance_db
+  username: postgres
+  password: postgres
+  sslMode: disable
+  maxOpenConns: 25
+  maxIdleConns: 5
+  connMaxLifetime: 5m
+
+manager:
+  healthCheckInterval: 30s
+  healthCheckTimeout: 5s
+  healthCheckRetry: 3
+  notificationInterval: 60s
+  notificationTimeout: 5s
+  eventQueueSize: 1000
+
+logging:
+  level: info
+  format: text

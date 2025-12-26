@@ -373,10 +373,14 @@ func (d *DualStore) SyncToDatabase(ctx context.Context) error {
 			return err
 		}
 
-		// Also save subscriptions
+		// Also save subscriptions (convert to service names only for backward compatibility)
 		if len(service.Subscriptions) > 0 {
 			key := service.GetKey()
-			if err := d.db.SaveSubscriptions(ctx, key, service.Subscriptions); err != nil {
+			serviceNames := make([]string, len(service.Subscriptions))
+			for i, sub := range service.Subscriptions {
+				serviceNames[i] = sub.ServiceName
+			}
+			if err := d.db.SaveSubscriptions(ctx, key, serviceNames); err != nil {
 				return err
 			}
 		}

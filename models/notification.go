@@ -19,6 +19,35 @@ type PodInfo struct {
 	Providers []ProviderInfo `json:"providers"`
 }
 
+// FilterProviders returns a new PodInfo with only the specified provider IDs
+// If providerIDs is empty, returns all providers
+func (p *PodInfo) FilterProviders(providerIDs []string) PodInfo {
+	if len(providerIDs) == 0 {
+		return *p
+	}
+
+	filtered := PodInfo{
+		PodName:   p.PodName,
+		Status:    p.Status,
+		Providers: make([]ProviderInfo, 0),
+	}
+
+	// Create a set for fast lookup
+	providerSet := make(map[string]bool)
+	for _, id := range providerIDs {
+		providerSet[id] = true
+	}
+
+	// Filter providers
+	for _, provider := range p.Providers {
+		if providerSet[provider.ProviderID] {
+			filtered.Providers = append(filtered.Providers, provider)
+		}
+	}
+
+	return filtered
+}
+
 // NotificationPayload is sent to subscribers when service changes occur
 type NotificationPayload struct {
 	ServiceName string      `json:"service_name"`
