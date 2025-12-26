@@ -76,8 +76,11 @@ func (h *Handler) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		zap.String("pod_name", registration.PodName),
 	)
 
-	// Create context with event data
-	ctx := events.NewRegisterContext(&registration)
+	// Create result channel to receive pod list
+	resultChan := make(chan *events.RegisterResult, 1)
+
+	// Create context with event data and result channel
+	ctx := events.NewRegisterContextWithResult(&registration, resultChan)
 
 	// Create and enqueue register event (with deadline for register events)
 	event := eventqueue.NewEvent(string(events.EventRegister), ctx, eventqueue.WithTimeout(5*time.Second))
@@ -92,23 +95,56 @@ func (h *Handler) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logger.Info("API: Register event enqueued successfully",
+	logger.Info("API: Register event enqueued successfully, waiting for result",
 		zap.String("service_name", registration.ServiceName),
 		zap.String("pod_name", registration.PodName),
 	)
 
-	// Return success response
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "accepted",
-		"message": "Registration event queued successfully",
-	})
+	// Wait for result with timeout
+	select {
+	case result := <-resultChan:
+		if result.Error != nil {
+			logger.Error("API: Registration processing failed",
+				zap.String("service_name", registration.ServiceName),
+				zap.String("pod_name", registration.PodName),
+				zap.Error(result.Error),
+			)
+			http.Error(w, result.Error.Error(), http.StatusInternalServerError)
+			return
+		}
 
-	logger.Debug("API: Sent success response for registration",
-		zap.String("service_name", registration.ServiceName),
-		zap.String("pod_name", registration.PodName),
-	)
+		logger.Info("API: Registration completed successfully",
+			zap.String("service_name", registration.ServiceName),
+			zap.String("pod_name", registration.PodName),
+			zap.Int("pod_count", len(result.Pods)),
+			zap.Int("subscribed_services_count", len(result.SubscribedServices)),
+		)
+
+		// Return success response with pod list and subscribed services
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(models.RegistrationResponse{
+			Status:             "success",
+			Message:            "Registration completed successfully",
+			ServiceName:        registration.ServiceName,
+			Pods:               result.Pods,
+			SubscribedServices: result.SubscribedServices,
+		})
+
+		logger.Debug("API: Sent success response with pod info and subscribed services",
+			zap.String("service_name", registration.ServiceName),
+			zap.String("pod_name", registration.PodName),
+			zap.Int("pod_count", len(result.Pods)),
+			zap.Int("subscribed_services_count", len(result.SubscribedServices)),
+		)
+
+	case <-time.After(10 * time.Second):
+		logger.Error("API: Registration processing timeout",
+			zap.String("service_name", registration.ServiceName),
+			zap.String("pod_name", registration.PodName),
+		)
+		http.Error(w, "Registration processing timeout", http.StatusGatewayTimeout)
+	}
 }
 
 // UnregisterHandler handles DELETE /unregister requests

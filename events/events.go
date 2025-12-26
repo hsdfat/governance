@@ -26,6 +26,14 @@ const (
 // RegisterEvent is triggered when a service registers
 type RegisterEvent struct {
 	Registration *models.ServiceRegistration
+	ResultChan   chan *RegisterResult // Channel to receive registration result
+}
+
+// RegisterResult contains the result of a registration
+type RegisterResult struct {
+	Pods               []models.PodInfo
+	SubscribedServices map[string][]models.PodInfo
+	Error              error
 }
 
 func (e *RegisterEvent) GetName() EventName {
@@ -80,8 +88,14 @@ func (e *ReconcileEvent) HasDeadline() bool {
 
 // NewRegisterContext creates a context with RegisterEvent data
 func NewRegisterContext(registration *models.ServiceRegistration) context.Context {
+	return NewRegisterContextWithResult(registration, nil)
+}
+
+// NewRegisterContextWithResult creates a context with RegisterEvent data and result channel
+func NewRegisterContextWithResult(registration *models.ServiceRegistration, resultChan chan *RegisterResult) context.Context {
 	return context.WithValue(context.Background(), ContextKeyEventData, &RegisterEvent{
 		Registration: registration,
+		ResultChan:   resultChan,
 	})
 }
 

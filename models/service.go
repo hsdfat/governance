@@ -56,3 +56,18 @@ type ServiceInfo struct {
 func (s *ServiceInfo) GetKey() string {
 	return s.ServiceName + ":" + s.PodName
 }
+
+// RegistrationResponse represents the response returned when a service registers
+type RegistrationResponse struct {
+	Status             string                    `json:"status"`
+	Message            string                    `json:"message"`
+	ServiceName        string                    `json:"service_name"`
+	Pods               []PodInfo                 `json:"pods"`                 // Pods of the registered service
+	SubscribedServices map[string][]PodInfo      `json:"subscribed_services"`  // Pods of services this client subscribed to
+}
+
+// ErrorResponse represents an error response from the manager
+type ErrorResponse struct {
+	Error   string `json:"error"`
+	Message string `json:"message"`
+}

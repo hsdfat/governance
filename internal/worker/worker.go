@@ -75,6 +75,58 @@ func (w *EventWorker) handleRegister(ctx context.Context, event eventqueue.IEven
 		zap.Int("pod_count", len(servicePods)),
 	)
 
+	// Send result to caller if result channel is provided
+	if registerEvent.ResultChan != nil {
+		// Build pod info list for the registered service
+		podInfoList := make([]models.PodInfo, 0, len(servicePods))
+		for _, pod := range servicePods {
+			podInfoList = append(podInfoList, models.PodInfo{
+				PodName:   pod.PodName,
+				Status:    pod.Status,
+				Providers: pod.Providers,
+			})
+		}
+
+		// Build subscribed services map
+		subscribedServices := make(map[string][]models.PodInfo)
+		if len(registerEvent.Registration.Subscriptions) > 0 {
+			logger.Debug("Collecting subscribed services pod info",
+				zap.String("service_key", serviceInfo.GetKey()),
+				zap.Strings("subscriptions", registerEvent.Registration.Subscriptions),
+			)
+
+			for _, subscribedServiceName := range registerEvent.Registration.Subscriptions {
+				pods := w.registry.GetByServiceName(subscribedServiceName)
+				if len(pods) > 0 {
+					podList := make([]models.PodInfo, 0, len(pods))
+					for _, pod := range pods {
+						podList = append(podList, models.PodInfo{
+							PodName:   pod.PodName,
+							Status:    pod.Status,
+							Providers: pod.Providers,
+						})
+					}
+					subscribedServices[subscribedServiceName] = podList
+					logger.Debug("Collected subscribed service pods",
+						zap.String("subscribed_service", subscribedServiceName),
+						zap.Int("pod_count", len(podList)),
+					)
+				} else {
+					logger.Debug("No pods found for subscribed service",
+						zap.String("subscribed_service", subscribedServiceName),
+					)
+				}
+			}
+		}
+
+		registerEvent.ResultChan <- &events.RegisterResult{
+			Pods:               podInfoList,
+			SubscribedServices: subscribedServices,
+			Error:              nil,
+		}
+		close(registerEvent.ResultChan)
+	}
+
 	// Build notification payload
 	payload := notifier.BuildNotificationPayload(
 		serviceInfo.ServiceName,
