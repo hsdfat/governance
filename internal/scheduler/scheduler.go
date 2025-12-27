@@ -7,7 +7,6 @@ import (
 	"github.com/chronnie/governance/events"
 	"github.com/chronnie/governance/internal/registry"
 	"github.com/chronnie/governance/pkg/logger"
-	"go.uber.org/zap"
 )
 
 // HealthCheckScheduler periodically schedules health check events for all services
@@ -16,22 +15,24 @@ type HealthCheckScheduler struct {
 	eventQueue eventqueue.IEventQueue
 	interval   time.Duration
 	stopChan   chan struct{}
+	logger     logger.Logger
 }
 
 // NewHealthCheckScheduler creates a new health check scheduler
-func NewHealthCheckScheduler(reg *registry.Registry, eventQueue eventqueue.IEventQueue, interval time.Duration) *HealthCheckScheduler {
+func NewHealthCheckScheduler(reg *registry.Registry, eventQueue eventqueue.IEventQueue, interval time.Duration, log logger.Logger) *HealthCheckScheduler {
 	return &HealthCheckScheduler{
 		registry:   reg,
 		eventQueue: eventQueue,
 		interval:   interval,
 		stopChan:   make(chan struct{}),
+		logger:     log,
 	}
 }
 
 // Start begins the health check scheduling
 func (s *HealthCheckScheduler) Start() {
-	logger.Info("HealthCheckScheduler: Starting health check scheduler",
-		zap.Duration("interval", s.interval),
+	s.logger.Infow("HealthCheckScheduler: Starting health check scheduler",
+		"interval", s.interval,
 	)
 
 	ticker := time.NewTicker(s.interval)
@@ -40,10 +41,10 @@ func (s *HealthCheckScheduler) Start() {
 	for {
 		select {
 		case <-ticker.C:
-			logger.Debug("HealthCheckScheduler: Ticker fired, scheduling health checks")
+			s.logger.Debugw("HealthCheckScheduler: Ticker fired, scheduling health checks")
 			s.scheduleHealthChecks()
 		case <-s.stopChan:
-			logger.Info("HealthCheckScheduler: Stopping health check scheduler")
+			s.logger.Infow("HealthCheckScheduler: Stopping health check scheduler")
 			return
 		}
 	}
@@ -51,7 +52,7 @@ func (s *HealthCheckScheduler) Start() {
 
 // Stop stops the health check scheduler
 func (s *HealthCheckScheduler) Stop() {
-	logger.Debug("HealthCheckScheduler: Stop signal sent")
+	s.logger.Debugw("HealthCheckScheduler: Stop signal sent")
 	close(s.stopChan)
 }
 
@@ -59,15 +60,15 @@ func (s *HealthCheckScheduler) Stop() {
 func (s *HealthCheckScheduler) scheduleHealthChecks() {
 	services := s.registry.GetAllServices()
 
-	logger.Debug("HealthCheckScheduler: Scheduling health checks for all services",
-		zap.Int("service_count", len(services)),
+	s.logger.Debugw("HealthCheckScheduler: Scheduling health checks for all services",
+		"service_count", len(services),
 	)
 
 	for _, service := range services {
-		logger.Debug("HealthCheckScheduler: Enqueuing health check event",
-			zap.String("service_key", service.GetKey()),
-			zap.String("service_name", service.ServiceName),
-			zap.String("pod_name", service.PodName),
+		s.logger.Debugw("HealthCheckScheduler: Enqueuing health check event",
+			"service_key", service.GetKey(),
+			"service_name", service.ServiceName,
+			"pod_name", service.PodName,
 		)
 
 		// Create context with event data
@@ -80,8 +81,8 @@ func (s *HealthCheckScheduler) scheduleHealthChecks() {
 		s.eventQueue.Enqueue(event)
 	}
 
-	logger.Info("HealthCheckScheduler: Scheduled health checks",
-		zap.Int("events_enqueued", len(services)),
+	s.logger.Infow("HealthCheckScheduler: Scheduled health checks",
+		"events_enqueued", len(services),
 	)
 }
 
@@ -90,21 +91,23 @@ type ReconcileScheduler struct {
 	eventQueue eventqueue.IEventQueue
 	interval   time.Duration
 	stopChan   chan struct{}
+	logger     logger.Logger
 }
 
 // NewReconcileScheduler creates a new reconcile scheduler
-func NewReconcileScheduler(eventQueue eventqueue.IEventQueue, interval time.Duration) *ReconcileScheduler {
+func NewReconcileScheduler(eventQueue eventqueue.IEventQueue, interval time.Duration, log logger.Logger) *ReconcileScheduler {
 	return &ReconcileScheduler{
 		eventQueue: eventQueue,
 		interval:   interval,
 		stopChan:   make(chan struct{}),
+		logger:     log,
 	}
 }
 
 // Start begins the reconcile scheduling
 func (s *ReconcileScheduler) Start() {
-	logger.Info("ReconcileScheduler: Starting reconcile scheduler",
-		zap.Duration("interval", s.interval),
+	s.logger.Infow("ReconcileScheduler: Starting reconcile scheduler",
+		"interval", s.interval,
 	)
 
 	ticker := time.NewTicker(s.interval)
@@ -113,10 +116,10 @@ func (s *ReconcileScheduler) Start() {
 	for {
 		select {
 		case <-ticker.C:
-			logger.Debug("ReconcileScheduler: Ticker fired, scheduling reconcile")
+			s.logger.Debugw("ReconcileScheduler: Ticker fired, scheduling reconcile")
 			s.scheduleReconcile()
 		case <-s.stopChan:
-			logger.Info("ReconcileScheduler: Stopping reconcile scheduler")
+			s.logger.Infow("ReconcileScheduler: Stopping reconcile scheduler")
 			return
 		}
 	}
@@ -124,13 +127,13 @@ func (s *ReconcileScheduler) Start() {
 
 // Stop stops the reconcile scheduler
 func (s *ReconcileScheduler) Stop() {
-	logger.Debug("ReconcileScheduler: Stop signal sent")
+	s.logger.Debugw("ReconcileScheduler: Stop signal sent")
 	close(s.stopChan)
 }
 
 // scheduleReconcile creates a reconcile event
 func (s *ReconcileScheduler) scheduleReconcile() {
-	logger.Info("ReconcileScheduler: Enqueuing reconcile event")
+	s.logger.Infow("ReconcileScheduler: Enqueuing reconcile event")
 
 	// Create context with event data
 	ctx := events.NewReconcileContext()
@@ -141,5 +144,5 @@ func (s *ReconcileScheduler) scheduleReconcile() {
 	// Enqueue event
 	s.eventQueue.Enqueue(event)
 
-	logger.Debug("ReconcileScheduler: Reconcile event enqueued")
+	s.logger.Debugw("ReconcileScheduler: Reconcile event enqueued")
 }

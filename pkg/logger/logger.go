@@ -1,127 +1,64 @@
 package logger
 
 import (
-	"os"
-	"strings"
-
+	"github.com/hsdfat/go-zlog/logger"
 	"go.uber.org/zap"
 )
 
-var (
-	// Global logger instance
-	globalLogger *zap.Logger
-	sugar        *zap.SugaredLogger
-)
+// Log is the global logger instance for the governance project
+var Log logger.LoggerI = logger.NewLogger()
 
 func init() {
-	globalLogger = NewLogger()
-	sugar = globalLogger.Sugar()
+	Log.(*logger.Logger).SugaredLogger = Log.(*logger.Logger).SugaredLogger.WithOptions(zap.AddCallerSkip(1))
 }
 
-// NewLogger creates a new logger based on environment variables
-// Environment variables:
-//   - GOVERNANCE_LOG_ENABLED: "true" to enable logging, anything else disables it (default: false)
-//   - GOVERNANCE_LOG_LEVEL: "debug", "info", "warn", "error" (default: "info")
-//   - GOVERNANCE_LOG_FORMAT: "json" or "console" (default: "console")
-func NewLogger() *zap.Logger {
-	// Check if logging is enabled
-	enabled := strings.ToLower(os.Getenv("GOVERNANCE_LOG_ENABLED")) == "true"
-	if !enabled {
-		// Return a no-op logger that does nothing
-		return zap.NewNop()
-	}
-
-	// Determine log level
-	levelStr := strings.ToLower(os.Getenv("GOVERNANCE_LOG_LEVEL"))
-	var level zap.AtomicLevel
-	switch levelStr {
-	case "debug":
-		level = zap.NewAtomicLevelAt(zap.DebugLevel)
-	case "info":
-		level = zap.NewAtomicLevelAt(zap.InfoLevel)
-	case "warn":
-		level = zap.NewAtomicLevelAt(zap.WarnLevel)
-	case "error":
-		level = zap.NewAtomicLevelAt(zap.ErrorLevel)
-	default:
-		level = zap.NewAtomicLevelAt(zap.InfoLevel)
-	}
-
-	// Determine format
-	format := strings.ToLower(os.Getenv("GOVERNANCE_LOG_FORMAT"))
-	var config zap.Config
-	if format == "json" {
-		config = zap.NewProductionConfig()
-	} else {
-		config = zap.NewDevelopmentConfig()
-	}
-	config.Level = level
-
-	logger, err := config.Build()
-	if err != nil {
-		// Fallback to no-op logger if build fails
-		return zap.NewNop()
-	}
-
-	return logger
+// SetLevel sets the global log level
+// Valid levels: "debug", "info", "warn", "error", "fatal"
+func SetLevel(level string) {
+	logger.SetLevel(level)
 }
 
-// Get returns the global logger instance
-func Get() *zap.Logger {
-	return globalLogger
+// WithFields creates a new logger with contextual fields
+// Example: logger.WithFields("conn_id", "abc123", "state", "OPEN")
+func WithFields(args ...any) logger.LoggerI {
+	return Log.With(args...).(logger.LoggerI)
 }
 
-// Sugar returns the global sugared logger instance
-func Sugar() *zap.SugaredLogger {
-	return sugar
+// Logger is an alias for the underlying logger interface
+type Logger = logger.LoggerI
+
+// New creates a new logger with a name and level
+func New(name, level string) Logger {
+	if level != "" {
+		// Set level if provided
+		logger.SetLevel(level)
+	}
+	return Log.With("component", name).(logger.LoggerI)
 }
 
-// Debug logs a debug message
+// Legacy compatibility functions for existing code using zap.Field
+
+// Debug logs a debug message with zap fields
 func Debug(msg string, fields ...zap.Field) {
-	globalLogger.Debug(msg, fields...)
+	Log.(*logger.Logger).SugaredLogger.Desugar().Debug(msg, fields...)
 }
 
-// Info logs an info message
+// Info logs an info message with zap fields
 func Info(msg string, fields ...zap.Field) {
-	globalLogger.Info(msg, fields...)
+	Log.(*logger.Logger).SugaredLogger.Desugar().Info(msg, fields...)
 }
 
-// Warn logs a warning message
+// Warn logs a warning message with zap fields
 func Warn(msg string, fields ...zap.Field) {
-	globalLogger.Warn(msg, fields...)
+	Log.(*logger.Logger).SugaredLogger.Desugar().Warn(msg, fields...)
 }
 
-// Error logs an error message
+// Error logs an error message with zap fields
 func Error(msg string, fields ...zap.Field) {
-	globalLogger.Error(msg, fields...)
-}
-
-// Debugf logs a debug message with formatting
-func Debugf(template string, args ...interface{}) {
-	sugar.Debugf(template, args...)
-}
-
-// Infof logs an info message with formatting
-func Infof(template string, args ...interface{}) {
-	sugar.Infof(template, args...)
-}
-
-// Warnf logs a warning message with formatting
-func Warnf(template string, args ...interface{}) {
-	sugar.Warnf(template, args...)
-}
-
-// Errorf logs an error message with formatting
-func Errorf(template string, args ...interface{}) {
-	sugar.Errorf(template, args...)
+	Log.(*logger.Logger).SugaredLogger.Desugar().Error(msg, fields...)
 }
 
 // Sync flushes any buffered log entries
 func Sync() error {
-	return globalLogger.Sync()
-}
-
-// WithFields creates a new logger with additional fields
-func WithFields(fields ...zap.Field) *zap.Logger {
-	return globalLogger.With(fields...)
+	return Log.(*logger.Logger).SugaredLogger.Sync()
 }

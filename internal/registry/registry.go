@@ -7,30 +7,39 @@ import (
 	"github.com/chronnie/governance/models"
 	"github.com/chronnie/governance/pkg/logger"
 	"github.com/chronnie/governance/storage"
-	"go.uber.org/zap"
 )
+
+// failureTracker tracks consecutive health check failures in-memory
+type failureTracker struct {
+	consecutiveFailures int
+	firstFailureAt      time.Time
+}
 
 // Registry manages all registered services using a pluggable storage backend
 // No locks needed because it's accessed only by single event queue worker
 type Registry struct {
-	store storage.RegistryStore
-	ctx   context.Context
+	store           storage.RegistryStore
+	logger          logger.Logger
+	ctx             context.Context
+	failureTracking map[string]*failureTracker // In-memory failure tracking (service_key -> failures)
 }
 
 // NewRegistry creates a new registry with the given storage backend
-func NewRegistry(store storage.RegistryStore) *Registry {
+func NewRegistry(store storage.RegistryStore, log logger.Logger) *Registry {
 	return &Registry{
-		store: store,
-		ctx:   context.Background(),
+		store:           store,
+		logger:          log,
+		ctx:             context.Background(),
+		failureTracking: make(map[string]*failureTracker),
 	}
 }
 
 // Register adds or updates a service in the registry
 func (r *Registry) Register(reg *models.ServiceRegistration) *models.ServiceInfo {
-	logger.Debug("Registry: Register called",
-		zap.String("service_name", reg.ServiceName),
-		zap.String("pod_name", reg.PodName),
-		zap.Int("subscriptions_count", len(reg.Subscriptions)),
+	r.logger.Debugw("Registry: Register called",
+		"service_name", reg.ServiceName,
+		"pod_name", reg.PodName,
+		"subscriptions_count", len(reg.Subscriptions),
 	)
 
 	serviceInfo := &models.ServiceInfo{
@@ -49,28 +58,28 @@ func (r *Registry) Register(reg *models.ServiceRegistration) *models.ServiceInfo
 
 	// Remove old subscriptions if service already exists
 	if oldService, err := r.store.GetService(r.ctx, key); err == nil {
-		logger.Debug("Registry: Service already exists, removing old subscriptions",
-			zap.String("service_key", key),
-			zap.Int("old_subscriptions_count", len(oldService.Subscriptions)),
+		r.logger.Debugw("Registry: Service already exists, removing old subscriptions",
+			"service_key", key,
+			"old_subscriptions_count", len(oldService.Subscriptions),
 		)
 		r.removeSubscriptions(key, oldService.Subscriptions)
 	} else {
-		logger.Debug("Registry: New service registration",
-			zap.String("service_key", key),
+		r.logger.Debugw("Registry: New service registration",
+			"service_key", key,
 		)
 	}
 
 	// Save service to storage
 	if err := r.store.SaveService(r.ctx, serviceInfo); err != nil {
-		logger.Error("Registry: Failed to save service to storage",
-			zap.String("service_key", key),
-			zap.Error(err),
+		r.logger.Errorw("Registry: Failed to save service to storage",
+			"service_key", key,
+			"error", err,
 		)
 		return serviceInfo
 	}
 
-	logger.Debug("Registry: Service saved to storage",
-		zap.String("service_key", key),
+	r.logger.Debugw("Registry: Service saved to storage",
+		"service_key", key,
 	)
 
 	// Add new subscriptions
@@ -80,16 +89,16 @@ func (r *Registry) Register(reg *models.ServiceRegistration) *models.ServiceInfo
 		for i, sub := range reg.Subscriptions {
 			subNames[i] = sub.ServiceName
 		}
-		logger.Debug("Registry: Adding subscriptions",
-			zap.String("service_key", key),
-			zap.Strings("subscriptions", subNames),
+		r.logger.Debugw("Registry: Adding subscriptions",
+			"service_key", key,
+			"subscriptions", subNames,
 		)
 		r.addSubscriptions(key, reg.Subscriptions)
 	}
 
-	logger.Info("Registry: Service registered successfully",
-		zap.String("service_key", key),
-		zap.Int("subscriptions_count", len(reg.Subscriptions)),
+	r.logger.Infow("Registry: Service registered successfully",
+		"service_key", key,
+		"subscriptions_count", len(reg.Subscriptions),
 	)
 
 	return serviceInfo
@@ -99,42 +108,45 @@ func (r *Registry) Register(reg *models.ServiceRegistration) *models.ServiceInfo
 func (r *Registry) Unregister(serviceName, podName string) *models.ServiceInfo {
 	key := serviceName + ":" + podName
 
-	logger.Debug("Registry: Unregister called",
-		zap.String("service_key", key),
+	r.logger.Debugw("Registry: Unregister called",
+		"service_key", key,
 	)
 
 	service, err := r.store.GetService(r.ctx, key)
 	if err != nil {
-		logger.Warn("Registry: Service not found for unregistration",
-			zap.String("service_key", key),
-			zap.Error(err),
+		r.logger.Warnw("Registry: Service not found for unregistration",
+			"service_key", key,
+			"error", err,
 		)
 		return nil
 	}
 
 	// Remove subscriptions
 	if len(service.Subscriptions) > 0 {
-		logger.Debug("Registry: Removing subscriptions",
-			zap.String("service_key", key),
-			zap.Int("subscriptions_count", len(service.Subscriptions)),
+		r.logger.Debugw("Registry: Removing subscriptions",
+			"service_key", key,
+			"subscriptions_count", len(service.Subscriptions),
 		)
 		r.removeSubscriptions(key, service.Subscriptions)
 	}
 
 	// Remove from storage
 	if err := r.store.DeleteService(r.ctx, key); err != nil {
-		logger.Error("Registry: Failed to delete service from storage",
-			zap.String("service_key", key),
-			zap.Error(err),
+		r.logger.Errorw("Registry: Failed to delete service from storage",
+			"service_key", key,
+			"error", err,
 		)
 	} else {
-		logger.Debug("Registry: Service deleted from storage",
-			zap.String("service_key", key),
+		r.logger.Debugw("Registry: Service deleted from storage",
+			"service_key", key,
 		)
 	}
 
-	logger.Info("Registry: Service unregistered successfully",
-		zap.String("service_key", key),
+	// Clean up in-memory failure tracking
+	delete(r.failureTracking, key)
+
+	r.logger.Infow("Registry: Service unregistered successfully",
+		"service_key", key,
 	)
 
 	return service
@@ -167,18 +179,18 @@ func (r *Registry) GetAllServices() []*models.ServiceInfo {
 	return result
 }
 
-// UpdateHealthStatus updates the health status of a service
+// UpdateHealthStatus updates the health status of a service and tracks consecutive failures
 func (r *Registry) UpdateHealthStatus(key string, status models.ServiceStatus) bool {
-	logger.Debug("Registry: UpdateHealthStatus called",
-		zap.String("service_key", key),
-		zap.String("new_status", string(status)),
+	r.logger.Debugw("Registry: UpdateHealthStatus called",
+		"service_key", key,
+		"new_status", string(status),
 	)
 
 	service, err := r.store.GetService(r.ctx, key)
 	if err != nil {
-		logger.Warn("Registry: Service not found for health status update",
-			zap.String("service_key", key),
-			zap.Error(err),
+		r.logger.Warnw("Registry: Service not found for health status update",
+			"service_key", key,
+			"error", err,
 		)
 		return false
 	}
@@ -186,32 +198,113 @@ func (r *Registry) UpdateHealthStatus(key string, status models.ServiceStatus) b
 	oldStatus := service.Status
 	timestamp := time.Now()
 
-	// Update in storage
-	if err := r.store.UpdateHealthStatus(r.ctx, key, status, timestamp); err != nil {
-		logger.Error("Registry: Failed to update health status in storage",
-			zap.String("service_key", key),
-			zap.String("old_status", string(oldStatus)),
-			zap.String("new_status", string(status)),
-			zap.Error(err),
+	// Track consecutive failures
+	switch status {
+	case models.StatusUnhealthy:
+		// If this is a new failure (was healthy before), reset the failure tracking
+		if oldStatus != models.StatusUnhealthy {
+			service.ConsecutiveFailures = 1
+			service.FirstFailureAt = timestamp
+		} else {
+			// Increment consecutive failures
+			service.ConsecutiveFailures++
+			// Set FirstFailureAt if it's not already set (e.g., service loaded from DB)
+			if service.FirstFailureAt.IsZero() {
+				service.FirstFailureAt = timestamp
+			}
+		}
+
+		r.logger.Warnw("Registry: Health check failed",
+			"service_key", key,
+			"consecutive_failures", service.ConsecutiveFailures,
+			"first_failure_at", service.FirstFailureAt,
+		)
+	case models.StatusHealthy:
+		// Reset failure tracking when service becomes healthy
+		if service.ConsecutiveFailures > 0 {
+			r.logger.Infow("Registry: Service recovered",
+				"service_key", key,
+				"previous_failures", service.ConsecutiveFailures,
+			)
+			service.ConsecutiveFailures = 0
+			service.FirstFailureAt = time.Time{}
+		}
+	}
+
+	// Update status and timestamp
+	service.Status = status
+	service.LastHealthCheck = timestamp
+
+	// Save the entire service object to persist failure tracking
+	if err := r.store.SaveService(r.ctx, service); err != nil {
+		r.logger.Errorw("Registry: Failed to update service in storage",
+			"service_key", key,
+			"old_status", string(oldStatus),
+			"new_status", string(status),
+			"error", err,
 		)
 		return false
 	}
 
 	statusChanged := oldStatus != status
 	if statusChanged {
-		logger.Info("Registry: Health status updated",
-			zap.String("service_key", key),
-			zap.String("old_status", string(oldStatus)),
-			zap.String("new_status", string(status)),
+		r.logger.Infow("Registry: Health status updated",
+			"service_key", key,
+			"old_status", string(oldStatus),
+			"new_status", string(status),
 		)
 	} else {
-		logger.Debug("Registry: Health status unchanged",
-			zap.String("service_key", key),
-			zap.String("status", string(status)),
+		r.logger.Debugw("Registry: Health status unchanged",
+			"service_key", key,
+			"status", string(status),
 		)
 	}
 
 	return statusChanged
+}
+
+// GetConsecutiveFailures returns the number of consecutive failures for a service
+func (r *Registry) GetConsecutiveFailures(key string) int {
+	tracker, exists := r.failureTracking[key]
+	if !exists {
+		return 0
+	}
+	return tracker.consecutiveFailures
+}
+
+// TrackHealthCheckFailure increments the failure counter and returns the new count
+func (r *Registry) TrackHealthCheckFailure(key string) int {
+	tracker, exists := r.failureTracking[key]
+	if !exists {
+		// First failure
+		tracker = &failureTracker{
+			consecutiveFailures: 1,
+			firstFailureAt:      time.Now(),
+		}
+		r.failureTracking[key] = tracker
+	} else {
+		// Increment consecutive failures
+		tracker.consecutiveFailures++
+	}
+
+	r.logger.Debugw("Registry: Tracked health check failure",
+		"service_key", key,
+		"consecutive_failures", tracker.consecutiveFailures,
+		"first_failure_at", tracker.firstFailureAt,
+	)
+
+	return tracker.consecutiveFailures
+}
+
+// ResetHealthCheckFailures resets the failure counter for a service
+func (r *Registry) ResetHealthCheckFailures(key string) {
+	_, exists := r.failureTracking[key]
+	if exists {
+		r.logger.Debugw("Registry: Resetting health check failures",
+			"service_key", key,
+		)
+		delete(r.failureTracking, key)
+	}
 }
 
 // GetSubscribers returns all subscriber keys for a given service name
@@ -236,15 +329,15 @@ func (r *Registry) GetSubscriberServices(serviceName string) []*models.ServiceIn
 func (r *Registry) addSubscriptions(subscriberKey string, subscriptions []models.Subscription) {
 	for _, sub := range subscriptions {
 		if err := r.store.AddSubscription(r.ctx, subscriberKey, sub.ServiceName); err != nil {
-			logger.Error("Registry: Failed to add subscription",
-				zap.String("subscriber_key", subscriberKey),
-				zap.String("service_name", sub.ServiceName),
-				zap.Error(err),
+			r.logger.Errorw("Registry: Failed to add subscription",
+				"subscriber_key", subscriberKey,
+				"service_name", sub.ServiceName,
+				"error", err,
 			)
 		} else {
-			logger.Debug("Registry: Subscription added",
-				zap.String("subscriber_key", subscriberKey),
-				zap.String("service_name", sub.ServiceName),
+			r.logger.Debugw("Registry: Subscription added",
+				"subscriber_key", subscriberKey,
+				"service_name", sub.ServiceName,
 			)
 		}
 	}
@@ -254,15 +347,15 @@ func (r *Registry) addSubscriptions(subscriberKey string, subscriptions []models
 func (r *Registry) removeSubscriptions(subscriberKey string, subscriptions []models.Subscription) {
 	for _, sub := range subscriptions {
 		if err := r.store.RemoveSubscription(r.ctx, subscriberKey, sub.ServiceName); err != nil {
-			logger.Error("Registry: Failed to remove subscription",
-				zap.String("subscriber_key", subscriberKey),
-				zap.String("service_name", sub.ServiceName),
-				zap.Error(err),
+			r.logger.Errorw("Registry: Failed to remove subscription",
+				"subscriber_key", subscriberKey,
+				"service_name", sub.ServiceName,
+				"error", err,
 			)
 		} else {
-			logger.Debug("Registry: Subscription removed",
-				zap.String("subscriber_key", subscriberKey),
-				zap.String("service_name", sub.ServiceName),
+			r.logger.Debugw("Registry: Subscription removed",
+				"subscriber_key", subscriberKey,
+				"service_name", sub.ServiceName,
 			)
 		}
 	}

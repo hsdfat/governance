@@ -75,15 +75,17 @@ const (
 
 // ServiceInfo represents the internal service information stored in registry
 type ServiceInfo struct {
-	ServiceName     string
-	PodName         string
-	Providers       []ProviderInfo
-	HealthCheckURL  string
-	NotificationURL string
-	Subscriptions   []Subscription
-	Status          ServiceStatus
-	LastHealthCheck time.Time
-	RegisteredAt    time.Time
+	ServiceName            string
+	PodName                string
+	Providers              []ProviderInfo
+	HealthCheckURL         string
+	NotificationURL        string
+	Subscriptions          []Subscription
+	Status                 ServiceStatus
+	LastHealthCheck        time.Time
+	RegisteredAt           time.Time
+	ConsecutiveFailures    int       // Number of consecutive health check failures
+	FirstFailureAt         time.Time // Timestamp of first failure in current streak
 }
 
 // GetKey returns a unique key for the service (service_name:pod_name)

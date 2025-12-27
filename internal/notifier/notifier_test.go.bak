@@ -13,7 +13,7 @@ import (
 
 func TestNewNotifier(t *testing.T) {
 	timeout := 5 * time.Second
-	notif := NewNotifier(timeout, logger.Log)
+	notif := NewNotifier(timeout)
 
 	if notif == nil {
 		t.Fatal("NewNotifier returned nil")
@@ -29,7 +29,7 @@ func TestNewNotifier(t *testing.T) {
 func TestNewHealthChecker(t *testing.T) {
 	timeout := 5 * time.Second
 	maxRetries := 3
-	hc := NewHealthChecker(timeout, maxRetries, logger.Log)
+	hc := NewHealthChecker(timeout, maxRetries)
 
 	if hc == nil {
 		t.Fatal("NewHealthChecker returned nil")
@@ -49,7 +49,7 @@ func TestCheckHealthSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	hc := NewHealthChecker(5*time.Second, 3, logger.Log)
+	hc := NewHealthChecker(5*time.Second, 3)
 	healthy := hc.CheckHealth(server.URL)
 
 	if !healthy {
@@ -64,7 +64,7 @@ func TestCheckHealthFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	hc := NewHealthChecker(1*time.Second, 1, logger.Log) // Low retry for faster test
+	hc := NewHealthChecker(1*time.Second, 1) // Low retry for faster test
 	healthy := hc.CheckHealth(server.URL)
 
 	if healthy {
@@ -73,7 +73,7 @@ func TestCheckHealthFailure(t *testing.T) {
 }
 
 func TestCheckHealthInvalidURL(t *testing.T) {
-	hc := NewHealthChecker(1*time.Second, 1, logger.Log)
+	hc := NewHealthChecker(1*time.Second, 1)
 	healthy := hc.CheckHealth("http://invalid-url-that-does-not-exist:99999/health")
 
 	if healthy {
@@ -88,7 +88,7 @@ func TestGetHealthStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	hc := NewHealthChecker(5*time.Second, 3, logger.Log)
+	hc := NewHealthChecker(5*time.Second, 3)
 	status := hc.GetHealthStatus(server.URL)
 
 	if status != models.StatusHealthy {
@@ -164,7 +164,7 @@ func TestNotifySubscriberSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	notif := NewNotifier(5 * time.Second, logger.Log)
+	notif := NewNotifier(5 * time.Second)
 	payload := &models.NotificationPayload{
 		ServiceName: "test-service",
 		EventType:   models.EventTypeRegister,
@@ -192,7 +192,7 @@ func TestNotifySubscribersFailed(t *testing.T) {
 	}))
 	defer server.Close()
 
-	notif := NewNotifier(1 * time.Second, logger.Log)
+	notif := NewNotifier(1 * time.Second)
 	payload := &models.NotificationPayload{
 		ServiceName: "test-service",
 		EventType:   models.EventTypeRegister,
@@ -215,7 +215,7 @@ func TestNotifyMultipleSubscribers(t *testing.T) {
 	}))
 	defer server.Close()
 
-	notif := NewNotifier(5 * time.Second, logger.Log)
+	notif := NewNotifier(5 * time.Second)
 	payload := &models.NotificationPayload{
 		ServiceName: "test-service",
 		EventType:   models.EventTypeRegister,
@@ -247,7 +247,7 @@ func TestHealthCheckWith2xxStatusCodes(t *testing.T) {
 			w.WriteHeader(statusCode)
 		}))
 
-		hc := NewHealthChecker(5*time.Second, 1, logger.Log)
+		hc := NewHealthChecker(5*time.Second, 1)
 		healthy := hc.CheckHealth(server.URL)
 
 		server.Close()
@@ -266,7 +266,7 @@ func TestHealthCheckWithNon2xxStatusCodes(t *testing.T) {
 			w.WriteHeader(statusCode)
 		}))
 
-		hc := NewHealthChecker(1*time.Second, 1, logger.Log)
+		hc := NewHealthChecker(1*time.Second, 1)
 		healthy := hc.CheckHealth(server.URL)
 
 		server.Close()
@@ -288,7 +288,7 @@ func TestHealthCheckRetry(t *testing.T) {
 	}))
 	defer server.Close()
 
-	hc := NewHealthChecker(500*time.Millisecond, maxRetries, logger.Log)
+	hc := NewHealthChecker(500*time.Millisecond, maxRetries)
 	healthy := hc.CheckHealth(server.URL)
 
 	if healthy {

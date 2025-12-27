@@ -5,12 +5,12 @@ import (
 
 	eventqueue "github.com/chronnie/go-event-queue"
 	"github.com/chronnie/governance/events"
+	"github.com/chronnie/governance/internal/auditor"
 	"github.com/chronnie/governance/internal/notifier"
 	"github.com/chronnie/governance/internal/registry"
 	"github.com/chronnie/governance/models"
 	"github.com/chronnie/governance/pkg/logger"
 	"github.com/chronnie/governance/storage"
-	"go.uber.org/zap"
 )
 
 // EventWorker processes events from the queue using handlers
@@ -19,6 +19,9 @@ type EventWorker struct {
 	notifier      *notifier.Notifier
 	healthChecker *notifier.HealthChecker
 	dualStore     *storage.DualStore // For database sync during reconciliation
+	auditor       *auditor.Auditor   // For audit logging
+	config        *models.ManagerConfig
+	logger        logger.Logger
 }
 
 // NewEventWorker creates a new event worker
@@ -27,12 +30,18 @@ func NewEventWorker(
 	notif *notifier.Notifier,
 	healthCheck *notifier.HealthChecker,
 	dualStore *storage.DualStore,
+	aud *auditor.Auditor,
+	cfg *models.ManagerConfig,
+	log logger.Logger,
 ) *EventWorker {
 	return &EventWorker{
 		registry:      reg,
 		notifier:      notif,
 		healthChecker: healthCheck,
 		dualStore:     dualStore,
+		auditor:       aud,
+		config:        cfg,
+		logger:        log,
 	}
 }
 
@@ -50,29 +59,37 @@ func (w *EventWorker) handleRegister(ctx context.Context, event eventqueue.IEven
 	eventData := events.GetEventData(ctx)
 	registerEvent, ok := eventData.(*events.RegisterEvent)
 	if !ok {
-		logger.Warn("Invalid event data type for register event")
+		w.logger.Warnw("Invalid event data type for register event")
 		return nil
 	}
 
-	logger.Info("Processing register event",
-		zap.String("service_name", registerEvent.Registration.ServiceName),
-		zap.String("pod_name", registerEvent.Registration.PodName),
-		zap.String("health_check_url", registerEvent.Registration.HealthCheckURL),
+	w.logger.Infow("Processing register event",
+		"service_name", registerEvent.Registration.ServiceName,
+		"pod_name", registerEvent.Registration.PodName,
+		"health_check_url", registerEvent.Registration.HealthCheckURL,
 	)
 
 	// Register service in registry
 	serviceInfo := w.registry.Register(registerEvent.Registration)
-	logger.Debug("Service registered in registry",
-		zap.String("service_key", serviceInfo.GetKey()),
-		zap.String("service_name", serviceInfo.ServiceName),
-		zap.String("pod_name", serviceInfo.PodName),
+	w.logger.Debugw("Service registered in registry",
+		"service_key", serviceInfo.GetKey(),
+		"service_name", serviceInfo.ServiceName,
+		"pod_name", serviceInfo.PodName,
 	)
+
+	// Log audit event
+	w.auditor.LogRegister(ctx, serviceInfo.ServiceName, serviceInfo.PodName, models.AuditResultSuccess, map[string]interface{}{
+		"health_check_url": serviceInfo.HealthCheckURL,
+		"notification_url": serviceInfo.NotificationURL,
+		"providers_count":  len(serviceInfo.Providers),
+		"subscriptions":    len(serviceInfo.Subscriptions),
+	}, "")
 
 	// Get all pods of this service
 	servicePods := w.registry.GetByServiceName(serviceInfo.ServiceName)
-	logger.Debug("Retrieved service pods",
-		zap.String("service_name", serviceInfo.ServiceName),
-		zap.Int("pod_count", len(servicePods)),
+	w.logger.Debugw("Retrieved service pods",
+		"service_name", serviceInfo.ServiceName,
+		"pod_count", len(servicePods),
 	)
 
 	// Send result to caller if result channel is provided
@@ -95,9 +112,9 @@ func (w *EventWorker) handleRegister(ctx context.Context, event eventqueue.IEven
 			for i, sub := range registerEvent.Registration.Subscriptions {
 				subNames[i] = sub.ServiceName
 			}
-			logger.Debug("Collecting subscribed services pod info",
-				zap.String("service_key", serviceInfo.GetKey()),
-				zap.Strings("subscriptions", subNames),
+			w.logger.Debugw("Collecting subscribed services pod info",
+				"service_key", serviceInfo.GetKey(),
+				"subscriptions", subNames,
 			)
 
 			for _, sub := range registerEvent.Registration.Subscriptions {
@@ -112,13 +129,13 @@ func (w *EventWorker) handleRegister(ctx context.Context, event eventqueue.IEven
 						})
 					}
 					subscribedServices[sub.ServiceName] = podList
-					logger.Debug("Collected subscribed service pods",
-						zap.String("subscribed_service", sub.ServiceName),
-						zap.Int("pod_count", len(podList)),
+					w.logger.Debugw("Collected subscribed service pods",
+						"subscribed_service", sub.ServiceName,
+						"pod_count", len(podList),
 					)
 				} else {
-					logger.Debug("No pods found for subscribed service",
-						zap.String("subscribed_service", sub.ServiceName),
+					w.logger.Debugw("No pods found for subscribed service",
+						"subscribed_service", sub.ServiceName,
 					)
 				}
 			}
@@ -139,13 +156,13 @@ func (w *EventWorker) handleRegister(ctx context.Context, event eventqueue.IEven
 		servicePods,
 	)
 
-	// Notify all subscribers of this service
+	// Notify all subscribers of this service (in a separate goroutine to avoid blocking)
 	subscribers := w.registry.GetSubscriberServices(serviceInfo.ServiceName)
-	logger.Info("Notifying subscribers of service registration",
-		zap.String("service_name", serviceInfo.ServiceName),
-		zap.Int("subscriber_count", len(subscribers)),
+	w.logger.Infow("Notifying subscribers of service registration",
+		"service_name", serviceInfo.ServiceName,
+		"subscriber_count", len(subscribers),
 	)
-	w.notifier.NotifySubscribers(subscribers, payload)
+	go w.notifier.NotifySubscribers(subscribers, payload)
 
 	return nil
 }
@@ -153,54 +170,51 @@ func (w *EventWorker) handleRegister(ctx context.Context, event eventqueue.IEven
 // handleUnregister processes service unregistration
 func (w *EventWorker) handleUnregister(ctx context.Context, event eventqueue.IEvent) error {
 	eventData := events.GetEventData(ctx)
-	unregisterEvent, ok := eventData.(*events.UnregisterEvent)
+	serviceInfo, ok := eventData.(*events.UnregisterEvent)
 	if !ok {
-		logger.Warn("Invalid event data type for unregister event")
+		w.logger.Warnw("Invalid event data type for unregister event")
 		return nil
 	}
 
-	logger.Info("Processing unregister event",
-		zap.String("service_name", unregisterEvent.ServiceName),
-		zap.String("pod_name", unregisterEvent.PodName),
+	w.logger.Infow("Processing unregister event",
+		"service_name", serviceInfo.ServiceName,
+		"pod_name", serviceInfo.PodName,
 	)
+	// Get subscribers before unregistering (for notification)
+	subscribers := w.registry.GetSubscriberServices(serviceInfo.ServiceName)
 
-	// Unregister service from registry
-	serviceInfo := w.registry.Unregister(unregisterEvent.ServiceName, unregisterEvent.PodName)
-	if serviceInfo == nil {
-		logger.Warn("Service not found for unregistration",
-			zap.String("service_name", unregisterEvent.ServiceName),
-			zap.String("pod_name", unregisterEvent.PodName),
+	// Unregister the failed service - this deletes from BOTH cache AND database
+	deletedService := w.registry.Unregister(serviceInfo.ServiceName, serviceInfo.PodName)
+	if deletedService != nil {
+		w.logger.Infow("Pod removed from management list (cache + database) after repeated failures",
+			"service_name", serviceInfo.ServiceName,
+			"pod_name", serviceInfo.PodName,
 		)
-		return nil
+
+		// Log auto-cleanup audit event
+		w.auditor.LogUnregister(ctx, serviceInfo.ServiceName, serviceInfo.PodName, models.AuditResultSuccess, map[string]interface{}{
+			"failure_limit":         w.config.HealthCheckFailureLimit,
+			"consecutive_failures":  deletedService.ConsecutiveFailures,
+			"failure_reason":        "exceeded health check failure limit",
+		}, "")
+
+		// Get remaining pods of this service (after deletion)
+		remainingPods := w.registry.GetByServiceName(serviceInfo.ServiceName)
+
+		// Notify subscribers about the deletion
+		payload := notifier.BuildNotificationPayload(
+			serviceInfo.ServiceName,
+			models.EventTypeUnregister,
+			remainingPods,
+		)
+
+		w.logger.Infow("Notifying subscribers of auto-cleanup",
+			"service_name", serviceInfo.ServiceName,
+			"subscriber_count", len(subscribers),
+			"remaining_pods", len(remainingPods),
+		)
+		go w.notifier.NotifySubscribers(subscribers, payload)
 	}
-
-	logger.Debug("Service unregistered from registry",
-		zap.String("service_key", serviceInfo.GetKey()),
-		zap.String("service_name", serviceInfo.ServiceName),
-		zap.String("pod_name", serviceInfo.PodName),
-	)
-
-	// Get remaining pods of this service (after unregistration)
-	servicePods := w.registry.GetByServiceName(unregisterEvent.ServiceName)
-	logger.Debug("Retrieved remaining service pods",
-		zap.String("service_name", unregisterEvent.ServiceName),
-		zap.Int("remaining_pod_count", len(servicePods)),
-	)
-
-	// Build notification payload
-	payload := notifier.BuildNotificationPayload(
-		unregisterEvent.ServiceName,
-		models.EventTypeUnregister,
-		servicePods,
-	)
-
-	// Notify all subscribers of this service
-	subscribers := w.registry.GetSubscriberServices(unregisterEvent.ServiceName)
-	logger.Info("Notifying subscribers of service unregistration",
-		zap.String("service_name", unregisterEvent.ServiceName),
-		zap.Int("subscriber_count", len(subscribers)),
-	)
-	w.notifier.NotifySubscribers(subscribers, payload)
 
 	return nil
 }
@@ -210,101 +224,140 @@ func (w *EventWorker) handleHealthCheck(ctx context.Context, event eventqueue.IE
 	eventData := events.GetEventData(ctx)
 	healthCheckEvent, ok := eventData.(*events.HealthCheckEvent)
 	if !ok {
-		logger.Warn("Invalid event data type for health check event")
+		w.logger.Warnw("Invalid event data type for health check event")
 		return nil
 	}
 
-	logger.Debug("Processing health check event",
-		zap.String("service_key", healthCheckEvent.ServiceKey),
+	w.logger.Debugw("Processing health check event",
+		"service_key", healthCheckEvent.ServiceKey,
 	)
 
 	// Get service from registry
 	serviceInfo, exists := w.registry.Get(healthCheckEvent.ServiceKey)
 	if !exists {
-		logger.Warn("Service not found for health check",
-			zap.String("service_key", healthCheckEvent.ServiceKey),
+		w.logger.Warnw("Service not found for health check",
+			"service_key", healthCheckEvent.ServiceKey,
 		)
 		return nil
 	}
 
-	logger.Debug("Performing health check",
-		zap.String("service_name", serviceInfo.ServiceName),
-		zap.String("pod_name", serviceInfo.PodName),
-		zap.String("health_check_url", serviceInfo.HealthCheckURL),
-		zap.String("current_status", string(serviceInfo.Status)),
+	w.logger.Debugw("Performing health check",
+		"service_name", serviceInfo.ServiceName,
+		"pod_name", serviceInfo.PodName,
+		"health_check_url", serviceInfo.HealthCheckURL,
+		"current_status", string(serviceInfo.Status),
 	)
 
 	// Perform health check with retries
-	newStatus := w.healthChecker.GetHealthStatus(serviceInfo.HealthCheckURL)
+	healthCheckPassed := w.healthChecker.CheckHealth(serviceInfo.HealthCheckURL)
 
-	logger.Debug("Health check completed",
-		zap.String("service_key", healthCheckEvent.ServiceKey),
-		zap.String("new_status", string(newStatus)),
+	w.logger.Debugw("Health check completed",
+		"service_key", healthCheckEvent.ServiceKey,
+		"health_check_passed", healthCheckPassed,
 	)
 
-	// Update health status in registry
-	statusChanged := w.registry.UpdateHealthStatus(healthCheckEvent.ServiceKey, newStatus)
-
-	// If status changed, notify subscribers
-	if statusChanged {
-		logger.Info("Service health status changed",
-			zap.String("service_name", serviceInfo.ServiceName),
-			zap.String("pod_name", serviceInfo.PodName),
-			zap.String("new_status", string(newStatus)),
-		)
-
-		// Get all pods of this service
-		servicePods := w.registry.GetByServiceName(serviceInfo.ServiceName)
-
-		// Build notification payload
-		payload := notifier.BuildNotificationPayload(
-			serviceInfo.ServiceName,
-			models.EventTypeUpdate,
-			servicePods,
-		)
-
-		// Notify all subscribers
-		subscribers := w.registry.GetSubscriberServices(serviceInfo.ServiceName)
-		logger.Info("Notifying subscribers of health status change",
-			zap.String("service_name", serviceInfo.ServiceName),
-			zap.Int("subscriber_count", len(subscribers)),
-		)
-		w.notifier.NotifySubscribers(subscribers, payload)
-	} else {
-		logger.Debug("Health status unchanged",
-			zap.String("service_key", healthCheckEvent.ServiceKey),
-			zap.String("status", string(newStatus)),
-		)
+	// Log heartbeat audit event
+	heartbeatResult := models.AuditResultSuccess
+	if !healthCheckPassed {
+		heartbeatResult = models.AuditResultFailure
 	}
+
+	previousStatus := serviceInfo.Status
+	newStatus := models.StatusHealthy
+	if !healthCheckPassed {
+		newStatus = models.StatusUnhealthy
+	}
+
+	w.auditor.LogHeartbeat(ctx, serviceInfo.ServiceName, serviceInfo.PodName, previousStatus, newStatus, heartbeatResult, map[string]interface{}{
+		"health_check_url": serviceInfo.HealthCheckURL,
+	})
+
+	// If health check FAILED, track consecutive failures and check auto-cleanup threshold
+	if !healthCheckPassed {
+		// Track the failure (in-memory only, not persisted to storage)
+		consecutiveFailures := w.registry.TrackHealthCheckFailure(healthCheckEvent.ServiceKey)
+
+		w.logger.Warnw("Health check failed",
+			"service_key", healthCheckEvent.ServiceKey,
+			"consecutive_failures", consecutiveFailures,
+			"failure_limit", w.config.HealthCheckFailureLimit,
+		)
+
+		// Get subscribers before unregistering (for notification)
+		subscribers := w.registry.GetSubscriberServices(serviceInfo.ServiceName)
+
+		// Unregister the failed service - this deletes from BOTH cache AND database
+		deletedService := w.registry.Unregister(serviceInfo.ServiceName, serviceInfo.PodName)
+		if deletedService != nil {
+			w.logger.Infow("Pod removed from management list (cache + database) after repeated failures",
+				"service_name", serviceInfo.ServiceName,
+				"pod_name", serviceInfo.PodName,
+				"consecutive_failures", consecutiveFailures,
+			)
+
+			// Log auto-cleanup audit event
+			w.auditor.LogAutoCleanup(ctx, serviceInfo.ServiceName, serviceInfo.PodName, consecutiveFailures, "exceeded health check failure limit", map[string]interface{}{
+				"failure_limit":    w.config.HealthCheckFailureLimit,
+				"health_check_url": serviceInfo.HealthCheckURL,
+			})
+
+			// Get remaining pods of this service (after deletion)
+			remainingPods := w.registry.GetByServiceName(serviceInfo.ServiceName)
+
+			// Notify subscribers about the deletion
+			payload := notifier.BuildNotificationPayload(
+				serviceInfo.ServiceName,
+				models.EventTypeUnregister,
+				remainingPods,
+			)
+
+			w.logger.Infow("Notifying subscribers of auto-cleanup",
+				"service_name", serviceInfo.ServiceName,
+				"subscriber_count", len(subscribers),
+				"remaining_pods", len(remainingPods),
+			)
+			go w.notifier.NotifySubscribers(subscribers, payload)
+		}
+
+		// Health check failed but not yet at threshold - just return
+		return nil
+	}
+
+	// Health check PASSED - reset failure counter
+	w.registry.ResetHealthCheckFailures(healthCheckEvent.ServiceKey)
+
+	w.logger.Debugw("Health check passed",
+		"service_key", healthCheckEvent.ServiceKey,
+	)
 
 	return nil
 }
 
 // handleReconcile processes reconcile event (notify all subscribers with current state + sync database)
 func (w *EventWorker) handleReconcile(ctx context.Context, event eventqueue.IEvent) error {
-	logger.Info("Processing reconcile event - starting full reconciliation")
+	w.logger.Infow("Processing reconcile event - starting full reconciliation")
 
 	// Sync from database to cache (if database is enabled)
 	// This ensures cache has the latest data from database
 	if w.dualStore.GetDatabase() != nil {
-		logger.Info("Database persistence enabled - syncing from database to cache")
+		w.logger.Infow("Database persistence enabled - syncing from database to cache")
 		servicesSynced, subsSynced, err := w.dualStore.SyncFromDatabase(ctx)
 		if err != nil {
-			logger.Error("Failed to sync from database", zap.Error(err))
+			w.logger.Errorw("Failed to sync from database", "error", err)
 		} else {
-			logger.Info("Database sync completed successfully",
-				zap.Int("services_synced", servicesSynced),
-				zap.Int("subscriptions_synced", subsSynced),
+			w.logger.Infow("Database sync completed successfully",
+				"services_synced", servicesSynced,
+				"subscriptions_synced", subsSynced,
 			)
 		}
 	} else {
-		logger.Debug("Database persistence disabled - using cache only")
+		w.logger.Debugw("Database persistence disabled - using cache only")
 	}
 
 	// Get all services from cache
 	allServices := w.registry.GetAllServices()
-	logger.Info("Retrieved all services from cache",
-		zap.Int("total_services", len(allServices)),
+	w.logger.Infow("Retrieved all services from cache",
+		"total_services", len(allServices),
 	)
 
 	// Group services by service name
@@ -313,16 +366,16 @@ func (w *EventWorker) handleReconcile(ctx context.Context, event eventqueue.IEve
 		serviceGroups[service.ServiceName] = append(serviceGroups[service.ServiceName], service)
 	}
 
-	logger.Info("Grouped services by service name",
-		zap.Int("service_groups", len(serviceGroups)),
+	w.logger.Infow("Grouped services by service name",
+		"service_groups", len(serviceGroups),
 	)
 
 	// For each service group, notify all subscribers
 	totalNotifications := 0
 	for serviceName, pods := range serviceGroups {
-		logger.Debug("Processing service group for reconciliation",
-			zap.String("service_name", serviceName),
-			zap.Int("pod_count", len(pods)),
+		w.logger.Debugw("Processing service group for reconciliation",
+			"service_name", serviceName,
+			"pod_count", len(pods),
 		)
 
 		// Build notification payload
@@ -335,24 +388,31 @@ func (w *EventWorker) handleReconcile(ctx context.Context, event eventqueue.IEve
 		// Get subscribers
 		subscribers := w.registry.GetSubscriberServices(serviceName)
 		if len(subscribers) > 0 {
-			logger.Info("Notifying subscribers for service reconciliation",
-				zap.String("service_name", serviceName),
-				zap.Int("pod_count", len(pods)),
-				zap.Int("subscriber_count", len(subscribers)),
+			w.logger.Infow("Notifying subscribers for service reconciliation",
+				"service_name", serviceName,
+				"pod_count", len(pods),
+				"subscriber_count", len(subscribers),
 			)
-			w.notifier.NotifySubscribers(subscribers, payload)
+			go w.notifier.NotifySubscribers(subscribers, payload)
 			totalNotifications += len(subscribers)
 		} else {
-			logger.Debug("No subscribers for service",
-				zap.String("service_name", serviceName),
+			w.logger.Debugw("No subscribers for service",
+				"service_name", serviceName,
 			)
 		}
 	}
 
-	logger.Info("Reconciliation completed",
-		zap.Int("service_groups", len(serviceGroups)),
-		zap.Int("total_notifications_sent", totalNotifications),
+	w.logger.Infow("Reconciliation completed",
+		"service_groups", len(serviceGroups),
+		"total_notifications_sent", totalNotifications,
 	)
+
+	// Log reconcile audit event
+	w.auditor.LogReconcile(ctx, models.AuditResultSuccess, map[string]interface{}{
+		"service_groups":     len(serviceGroups),
+		"total_services":     len(allServices),
+		"notifications_sent": totalNotifications,
+	})
 
 	return nil
 }

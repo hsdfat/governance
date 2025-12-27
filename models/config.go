@@ -8,9 +8,10 @@ type ManagerConfig struct {
 	ServerPort int `json:"server_port"`
 
 	// Health check settings
-	HealthCheckInterval time.Duration `json:"health_check_interval"` // How often to check health
-	HealthCheckTimeout  time.Duration `json:"health_check_timeout"`  // Timeout for health check HTTP call
-	HealthCheckRetry    int           `json:"health_check_retry"`    // Number of retries before marking unhealthy
+	HealthCheckInterval       time.Duration `json:"health_check_interval"`        // How often to check health
+	HealthCheckTimeout        time.Duration `json:"health_check_timeout"`         // Timeout for health check HTTP call
+	HealthCheckRetry          int           `json:"health_check_retry"`           // Number of retries before marking unhealthy
+	HealthCheckFailureLimit   int           `json:"health_check_failure_limit"`   // Number of consecutive failures before auto-cleanup (0 = disabled)
 
 	// Notification settings
 	NotificationInterval time.Duration `json:"notification_interval"` // Periodic reconcile interval
@@ -23,12 +24,13 @@ type ManagerConfig struct {
 // DefaultConfig returns a default configuration
 func DefaultConfig() *ManagerConfig {
 	return &ManagerConfig{
-		ServerPort:           8080,
-		HealthCheckInterval:  30 * time.Second,
-		HealthCheckTimeout:   5 * time.Second,
-		HealthCheckRetry:     3,
-		NotificationInterval: 60 * time.Second,
-		NotificationTimeout:  5 * time.Second,
-		EventQueueSize:       1000,
+		ServerPort:              8080,
+		HealthCheckInterval:     30 * time.Second,
+		HealthCheckTimeout:      5 * time.Second,
+		HealthCheckRetry:        3,
+		HealthCheckFailureLimit: 5, // Auto-cleanup after 5 consecutive failures
+		NotificationInterval:    60 * time.Second,
+		NotificationTimeout:     5 * time.Second,
+		EventQueueSize:          1000,
 	}
 }

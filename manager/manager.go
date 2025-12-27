@@ -8,6 +8,7 @@ import (
 
 	eventqueue "github.com/chronnie/go-event-queue"
 	"github.com/chronnie/governance/internal/api"
+	"github.com/chronnie/governance/internal/auditor"
 	"github.com/chronnie/governance/internal/notifier"
 	"github.com/chronnie/governance/internal/registry"
 	"github.com/chronnie/governance/internal/scheduler"
@@ -15,12 +16,13 @@ import (
 	"github.com/chronnie/governance/models"
 	"github.com/chronnie/governance/pkg/logger"
 	"github.com/chronnie/governance/storage"
-	"go.uber.org/zap"
+	"github.com/chronnie/governance/storage/memory"
 )
 
 // Manager is the main governance manager component
 type Manager struct {
 	config *models.ManagerConfig
+	logger logger.Logger
 
 	// Core components
 	dualStore     *storage.DualStore // Always uses in-memory cache + optional database
@@ -28,6 +30,7 @@ type Manager struct {
 	eventQueue    eventqueue.IEventQueue
 	notifier      *notifier.Notifier
 	healthChecker *notifier.HealthChecker
+	auditor       *auditor.Auditor // Audit logger
 	eventWorker   *worker.EventWorker
 	queueContext  context.Context
 	queueCancel   context.CancelFunc
@@ -52,15 +55,27 @@ func NewManager(config *models.ManagerConfig) *Manager {
 // The manager always uses in-memory cache for performance.
 // If db is not nil, all changes are also persisted to the database asynchronously.
 func NewManagerWithDatabase(config *models.ManagerConfig, db storage.DatabaseStore) *Manager {
+	return NewManagerWithDatabaseAndAudit(config, db, nil)
+}
+
+// NewManagerWithDatabaseAndAudit creates a new governance manager with optional database persistence and audit store.
+// The manager always uses in-memory cache for performance.
+// If db is not nil, all changes are also persisted to the database asynchronously.
+// If auditStore is not nil, all governance events are logged to the audit store.
+// If auditStore is nil, audit logs are stored in-memory only.
+func NewManagerWithDatabaseAndAudit(config *models.ManagerConfig, db storage.DatabaseStore, auditStore storage.AuditStore) *Manager {
 	if config == nil {
 		config = models.DefaultConfig()
 	}
+
+	// Create logger
+	log := logger.Log
 
 	// Create dual-layer storage (always has cache, database is optional)
 	dualStore := storage.NewDualStore(db)
 
 	// Create registry with dual store
-	reg := registry.NewRegistry(dualStore)
+	reg := registry.NewRegistry(dualStore, log)
 
 	// Create event queue with Sequential mode for FIFO processing
 	queueConfig := eventqueue.EventQueueConfig{
@@ -70,28 +85,44 @@ func NewManagerWithDatabase(config *models.ManagerConfig, db storage.DatabaseSto
 	eventQueue := eventqueue.NewEventQueue(queueConfig)
 
 	// Create notifier
-	notif := notifier.NewNotifier(config.NotificationTimeout)
+	notif := notifier.NewNotifier(config.NotificationTimeout, log)
 
 	// Create health checker
-	healthCheck := notifier.NewHealthChecker(config.HealthCheckTimeout, config.HealthCheckRetry)
+	healthCheck := notifier.NewHealthChecker(config.HealthCheckTimeout, config.HealthCheckRetry, log)
+
+	// Create audit store (use in-memory if not provided)
+	if auditStore == nil {
+		auditStore = memory.NewAuditStore()
+	}
+
+	// Create auditor
+	aud := auditor.NewAuditor(auditStore, log)
 
 	// Create event worker and register handlers
-	eventWorker := worker.NewEventWorker(reg, notif, healthCheck, dualStore)
+	eventWorker := worker.NewEventWorker(reg, notif, healthCheck, dualStore, aud, config, log)
 	eventWorker.RegisterHandlers(eventQueue)
 
 	// Create schedulers
-	healthCheckScheduler := scheduler.NewHealthCheckScheduler(reg, eventQueue, config.HealthCheckInterval)
-	reconcileScheduler := scheduler.NewReconcileScheduler(eventQueue, config.NotificationInterval)
+	healthCheckScheduler := scheduler.NewHealthCheckScheduler(reg, eventQueue, config.HealthCheckInterval, log)
+	reconcileScheduler := scheduler.NewReconcileScheduler(eventQueue, config.NotificationInterval, log)
 
 	// Create HTTP handler
-	handler := api.NewHandler(reg, eventQueue)
+	handler := api.NewHandler(reg, eventQueue, log)
+
+	// Create audit HTTP handler
+	auditHandler := api.NewAuditHandler(aud, log)
 
 	// Setup HTTP routes
 	mux := http.NewServeMux()
 	mux.HandleFunc("/register", handler.RegisterHandler)
 	mux.HandleFunc("/unregister", handler.UnregisterHandler)
+	mux.HandleFunc("/heartbeat", handler.HeartbeatHandler)
 	mux.HandleFunc("/services", handler.ServicesHandler)
 	mux.HandleFunc("/health", handler.HealthHandler)
+
+	// Audit endpoints
+	mux.HandleFunc("/audit/logs", auditHandler.GetAuditLogsHandler)
+	mux.HandleFunc("/audit/logs/by-id", auditHandler.GetAuditLogByIDHandler)
 
 	// Create HTTP server
 	httpServer := &http.Server{
@@ -104,11 +135,13 @@ func NewManagerWithDatabase(config *models.ManagerConfig, db storage.DatabaseSto
 
 	return &Manager{
 		config:               config,
+		logger:               log,
 		dualStore:            dualStore,
 		registry:             reg,
 		eventQueue:           eventQueue,
 		notifier:             notif,
 		healthChecker:        healthCheck,
+		auditor:              aud,
 		eventWorker:          eventWorker,
 		healthCheckScheduler: healthCheckScheduler,
 		reconcileScheduler:   reconcileScheduler,
@@ -121,12 +154,12 @@ func NewManagerWithDatabase(config *models.ManagerConfig, db storage.DatabaseSto
 
 // Start starts the governance manager
 func (m *Manager) Start() error {
-	logger.Info("Starting governance manager")
+	m.logger.Info("Starting governance manager")
 
 	// Start event queue
 	go func() {
 		if err := m.eventQueue.Start(m.queueContext); err != nil {
-			logger.Error("Event queue error", zap.Error(err))
+			m.logger.Errorw("Event queue error", "error", err)
 		}
 	}()
 
@@ -136,15 +169,15 @@ func (m *Manager) Start() error {
 
 	// Start HTTP server
 	go func() {
-		logger.Info("HTTP server starting", zap.Int("port", m.config.ServerPort))
+		m.logger.Infow("HTTP server starting", "port", m.config.ServerPort)
 		if err := m.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("HTTP server error", zap.Error(err))
+			m.logger.Errorw("HTTP server error", "error", err)
 		}
 	}()
 
-	logger.Info("Governance manager started successfully",
-		zap.Duration("health_check_interval", m.config.HealthCheckInterval),
-		zap.Duration("notification_interval", m.config.NotificationInterval),
+	m.logger.Infow("Governance manager started successfully",
+		"health_check_interval", m.config.HealthCheckInterval,
+		"notification_interval", m.config.NotificationInterval,
 	)
 
 	return nil
@@ -152,7 +185,7 @@ func (m *Manager) Start() error {
 
 // Stop gracefully stops the governance manager
 func (m *Manager) Stop() error {
-	logger.Info("Stopping governance manager")
+	m.logger.Info("Stopping governance manager")
 
 	// Stop schedulers
 	m.healthCheckScheduler.Stop()
@@ -163,24 +196,29 @@ func (m *Manager) Stop() error {
 	defer cancel()
 
 	if err := m.httpServer.Shutdown(ctx); err != nil {
-		logger.Error("HTTP server shutdown error", zap.Error(err))
+		m.logger.Errorw("HTTP server shutdown error", "error", err)
 	}
 
 	// Stop event queue
 	if err := m.eventQueue.Stop(); err != nil {
-		logger.Error("Event queue stop error", zap.Error(err))
+		m.logger.Errorw("Event queue stop error", "error", err)
 	}
 	m.queueCancel()
 
 	// Close storage connection (database if enabled)
 	if err := m.dualStore.Close(); err != nil {
-		logger.Error("Storage close error", zap.Error(err))
+		m.logger.Errorw("Storage close error", "error", err)
+	}
+
+	// Close auditor
+	if err := m.auditor.Close(); err != nil {
+		m.logger.Errorw("Auditor close error", "error", err)
 	}
 
 	// Close stop channel
 	close(m.stopChan)
 
-	logger.Info("Governance manager stopped")
+	m.logger.Info("Governance manager stopped")
 	logger.Sync() // Flush any buffered logs
 	return nil
 }

@@ -499,3 +499,209 @@ func TestClient_ThreadSafety(t *testing.T) {
 
 	// If we get here without race detector errors, the test passes
 }
+
+func TestClient_SendHeartbeat_Success(t *testing.T) {
+	// Track heartbeat requests
+	heartbeatReceived := false
+
+	// Create mock server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/heartbeat" {
+			heartbeatReceived = true
+			if r.Method != http.MethodPost {
+				t.Errorf("Expected POST request, got %s", r.Method)
+			}
+
+			serviceName := r.URL.Query().Get("service_name")
+			podName := r.URL.Query().Get("pod_name")
+
+			if serviceName != "test-service" {
+				t.Errorf("Expected service_name 'test-service', got '%s'", serviceName)
+			}
+			if podName != "test-pod-1" {
+				t.Errorf("Expected pod_name 'test-pod-1', got '%s'", podName)
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":    "ok",
+				"timestamp": time.Now(),
+			})
+		}
+	}))
+	defer server.Close()
+
+	// Create client
+	client := createTestClient(server.URL)
+	client.lastHeartbeatTime = time.Now().Add(-1 * time.Minute) // Set initial time
+
+	// Send heartbeat
+	err := client.SendHeartbeat()
+	if err != nil {
+		t.Fatalf("SendHeartbeat failed: %v", err)
+	}
+
+	if !heartbeatReceived {
+		t.Error("Heartbeat request was not received by server")
+	}
+
+	// Verify last heartbeat time was updated
+	if time.Since(client.lastHeartbeatTime) > 1*time.Second {
+		t.Error("Last heartbeat time was not updated")
+	}
+}
+
+func TestClient_SendHeartbeat_ServiceNotFound(t *testing.T) {
+	// Create mock server that returns 404
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/heartbeat" {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("Service not registered"))
+		}
+	}))
+	defer server.Close()
+
+	client := createTestClient(server.URL)
+
+	err := client.SendHeartbeat()
+	if err == nil {
+		t.Fatal("Expected error, got nil")
+	}
+
+	if !contains(err.Error(), "404") {
+		t.Errorf("Expected error to contain '404', got: %v", err)
+	}
+}
+
+func TestClient_HeartbeatLoop_ReregistersOnTimeout(t *testing.T) {
+	registerCount := 0
+	heartbeatCount := 0
+
+	// Create mock server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/register":
+			registerCount++
+			response := models.RegistrationResponse{
+				Status:      "success",
+				Message:     "Registration completed successfully",
+				ServiceName: "test-service",
+				Pods: []models.PodInfo{
+					createSamplePodInfo("test-pod-1", models.StatusHealthy),
+				},
+				SubscribedServices: map[string][]models.PodInfo{},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(response)
+
+		case "/heartbeat":
+			heartbeatCount++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":    "ok",
+				"timestamp": time.Now(),
+			})
+		}
+	}))
+	defer server.Close()
+
+	// Create client with short intervals
+	client := NewClient(&ClientConfig{
+		ManagerURL:        server.URL,
+		ServiceName:       "test-service",
+		PodName:           "test-pod-1",
+		Timeout:           5 * time.Second,
+		HeartbeatInterval: 100 * time.Millisecond,
+		HeartbeatTimeout:  250 * time.Millisecond,
+	})
+
+	// Initial registration
+	registration := &models.ServiceRegistration{
+		ServiceName: "test-service",
+		PodName:     "test-pod-1",
+		Providers: []models.ProviderInfo{
+			{ProviderID: "test-http", Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080},
+		},
+		HealthCheckURL:  "http://192.168.1.10:8080/health",
+		NotificationURL: "http://192.168.1.10:8080/notify",
+	}
+	_, err := client.Register(registration)
+	if err != nil {
+		t.Fatalf("Initial registration failed: %v", err)
+	}
+
+	initialRegisterCount := registerCount
+
+	// Set last heartbeat time to trigger timeout
+	client.mu.Lock()
+	client.lastHeartbeatTime = time.Now().Add(-1 * time.Second)
+	client.mu.Unlock()
+
+	// Start heartbeat
+	client.StartHeartbeat()
+	defer client.StopHeartbeat()
+
+	// Wait for re-registration to happen
+	time.Sleep(400 * time.Millisecond)
+
+	if registerCount <= initialRegisterCount {
+		t.Error("Expected re-registration to occur after heartbeat timeout")
+	}
+
+	if heartbeatCount == 0 {
+		t.Error("Expected at least one heartbeat to be sent")
+	}
+}
+
+func TestClient_StopHeartbeat(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewClient(&ClientConfig{
+		ManagerURL:        server.URL,
+		ServiceName:       "test-service",
+		PodName:           "test-pod-1",
+		HeartbeatInterval: 50 * time.Millisecond,
+	})
+
+	// Start heartbeat
+	client.StartHeartbeat()
+
+	// Let it run for a bit
+	time.Sleep(100 * time.Millisecond)
+
+	// Stop heartbeat
+	done := make(chan bool)
+	go func() {
+		client.StopHeartbeat()
+		done <- true
+	}()
+
+	// Verify it stops within reasonable time
+	select {
+	case <-done:
+		// Success
+	case <-time.After(1 * time.Second):
+		t.Fatal("StopHeartbeat did not complete within timeout")
+	}
+}
+
+// Helper function to check if string contains substring
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && indexOf(s, substr) >= 0))
+}
+
+func indexOf(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
+}

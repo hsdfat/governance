@@ -5,6 +5,7 @@ go 1.25.5
 require (
 	github.com/chronnie/go-event-queue v1.0.2
 	github.com/go-sql-driver/mysql v1.8.1
+	github.com/hsdfat/go-zlog v0.0.3
 	github.com/lib/pq v1.10.9
 	github.com/spf13/viper v1.21.0
 	go.mongodb.org/mongo-driver v1.17.1
@@ -16,6 +17,7 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.13.6 // indirect
 	github.com/montanaflynn/stats v0.7.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect

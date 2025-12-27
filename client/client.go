@@ -23,22 +23,38 @@ type Client struct {
 
 	// Pod info storage
 	mu                 sync.RWMutex
-	ownPods            []models.PodInfo              // Pods of this service
-	subscribedServices map[string][]models.PodInfo   // Pods of subscribed services
+	ownPods            []models.PodInfo            // Pods of this service
+	subscribedServices map[string][]models.PodInfo // Pods of subscribed services
+
+	// Heartbeat tracking
+	lastHeartbeatTime time.Time
+	heartbeatInterval time.Duration
+	heartbeatTimeout  time.Duration
+	stopHeartbeat     chan struct{}
+	heartbeatStopped  chan struct{}
+	registration      *models.ServiceRegistration
 }
 
 // ClientConfig contains configuration for the client
 type ClientConfig struct {
-	ManagerURL  string        // Manager URL (e.g., "http://manager:8080")
-	ServiceName string        // This service's name
-	PodName     string        // This pod's name
-	Timeout     time.Duration // HTTP request timeout
+	ManagerURL        string        // Manager URL (e.g., "http://manager:8080")
+	ServiceName       string        // This service's name
+	PodName           string        // This pod's name
+	Timeout           time.Duration // HTTP request timeout
+	HeartbeatInterval time.Duration // Interval between heartbeats (default: 30s)
+	HeartbeatTimeout  time.Duration // Time before considering manager unreachable (default: 90s)
 }
 
 // NewClient creates a new governance client
 func NewClient(config *ClientConfig) *Client {
 	if config.Timeout == 0 {
 		config.Timeout = 10 * time.Second
+	}
+	if config.HeartbeatInterval == 0 {
+		config.HeartbeatInterval = 30 * time.Second
+	}
+	if config.HeartbeatTimeout == 0 {
+		config.HeartbeatTimeout = 90 * time.Second
 	}
 
 	return &Client{
@@ -50,6 +66,10 @@ func NewClient(config *ClientConfig) *Client {
 		podName:            config.PodName,
 		ownPods:            make([]models.PodInfo, 0),
 		subscribedServices: make(map[string][]models.PodInfo),
+		heartbeatInterval:  config.HeartbeatInterval,
+		heartbeatTimeout:   config.HeartbeatTimeout,
+		stopHeartbeat:      make(chan struct{}),
+		heartbeatStopped:   make(chan struct{}),
 	}
 }
 
@@ -58,9 +78,13 @@ func (c *Client) Register(registration *models.ServiceRegistration) (*models.Reg
 	// Set service name and pod name if not already set
 	if registration.ServiceName == "" {
 		registration.ServiceName = c.serviceName
+	} else {
+		c.serviceName = registration.ServiceName
 	}
 	if registration.PodName == "" {
 		registration.PodName = c.podName
+	} else {
+		c.podName = registration.PodName
 	}
 
 	// Marshal registration to JSON
@@ -114,6 +138,8 @@ func (c *Client) Register(registration *models.ServiceRegistration) (*models.Reg
 	if c.subscribedServices == nil {
 		c.subscribedServices = make(map[string][]models.PodInfo)
 	}
+	c.registration = registration
+	c.lastHeartbeatTime = time.Now()
 	c.mu.Unlock()
 
 	log.Printf("[Client] Successfully registered: service=%s, pod=%s, total_pods=%d, subscribed_services=%d",
@@ -293,6 +319,87 @@ func (c *Client) WrapNotificationHandler(userHandler NotificationHandler) Notifi
 		// Then call the user's handler
 		if userHandler != nil {
 			userHandler(payload)
+		}
+	}
+}
+
+// SendHeartbeat sends a heartbeat to the manager and updates the last heartbeat time
+func (c *Client) SendHeartbeat() error {
+	url := fmt.Sprintf("%s/heartbeat?service_name=%s&pod_name=%s", c.managerURL, c.serviceName, c.podName)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create heartbeat request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send heartbeat: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("heartbeat failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Update last heartbeat time
+	c.mu.Lock()
+	c.lastHeartbeatTime = time.Now()
+	c.mu.Unlock()
+
+	log.Printf("[Client] Heartbeat sent successfully: service=%s, pod=%s", c.serviceName, c.podName)
+	return nil
+}
+
+// StartHeartbeat starts the background heartbeat goroutine
+func (c *Client) StartHeartbeat() {
+	go c.heartbeatLoop()
+}
+
+// StopHeartbeat stops the background heartbeat goroutine
+func (c *Client) StopHeartbeat() {
+	close(c.stopHeartbeat)
+	<-c.heartbeatStopped
+}
+
+// heartbeatLoop runs in the background and sends heartbeats periodically
+func (c *Client) heartbeatLoop() {
+	ticker := time.NewTicker(c.heartbeatInterval)
+	defer ticker.Stop()
+	defer close(c.heartbeatStopped)
+
+	for {
+		select {
+		case <-ticker.C:
+			// Check if we've exceeded the heartbeat timeout
+			c.mu.RLock()
+			timeSinceLastHeartbeat := time.Since(c.lastHeartbeatTime)
+			reg := c.registration
+			c.mu.RUnlock()
+
+			if timeSinceLastHeartbeat > c.heartbeatTimeout {
+				log.Printf("[Client] Heartbeat timeout exceeded (%v > %v), re-registering: service=%s, pod=%s",
+					timeSinceLastHeartbeat, c.heartbeatTimeout, c.serviceName, c.podName)
+
+				if reg != nil {
+					if _, err := c.Register(reg); err != nil {
+						log.Printf("[Client] Failed to re-register after heartbeat timeout: %v", err)
+					} else {
+						log.Printf("[Client] Successfully re-registered after heartbeat timeout")
+					}
+				} else {
+					log.Printf("[Client] Cannot re-register: no registration data stored")
+				}
+			} else {
+				// Send heartbeat
+				if err := c.SendHeartbeat(); err != nil {
+					log.Printf("[Client] Failed to send heartbeat: %v", err)
+				}
+			}
+
+		case <-c.stopHeartbeat:
+			log.Printf("[Client] Stopping heartbeat goroutine: service=%s, pod=%s", c.serviceName, c.podName)
+			return
 		}
 	}
 }

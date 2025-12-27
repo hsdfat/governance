@@ -9,39 +9,40 @@ import (
 
 	"github.com/chronnie/governance/models"
 	"github.com/chronnie/governance/pkg/logger"
-	"go.uber.org/zap"
 )
 
 // Notifier handles sending notifications to subscribers
 type Notifier struct {
 	httpClient *http.Client
 	timeout    time.Duration
+	logger     logger.Logger
 }
 
 // NewNotifier creates a new notifier with given timeout
-func NewNotifier(timeout time.Duration) *Notifier {
+func NewNotifier(timeout time.Duration, log logger.Logger) *Notifier {
 	return &Notifier{
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
 		timeout: timeout,
+		logger:  log,
 	}
 }
 
 // NotifySubscribers sends notification to all subscribers
 // Does not retry on failure as per requirements
 func (n *Notifier) NotifySubscribers(subscribers []*models.ServiceInfo, payload *models.NotificationPayload) {
-	logger.Debug("Notifier: NotifySubscribers called",
-		zap.Int("subscriber_count", len(subscribers)),
-		zap.String("event_type", string(payload.EventType)),
-		zap.String("service_name", payload.ServiceName),
+	n.logger.Debugw("Notifier: NotifySubscribers called",
+		"subscriber_count", len(subscribers),
+		"event_type", string(payload.EventType),
+		"service_name", payload.ServiceName,
 	)
 
 	for _, subscriber := range subscribers {
-		logger.Debug("Notifier: Sending notification to subscriber",
-			zap.String("subscriber_key", subscriber.GetKey()),
-			zap.String("notification_url", subscriber.NotificationURL),
-			zap.String("event_type", string(payload.EventType)),
+		n.logger.Debugw("Notifier: Sending notification to subscriber",
+			"subscriber_key", subscriber.GetKey(),
+			"notification_url", subscriber.NotificationURL,
+			"event_type", string(payload.EventType),
 		)
 		go n.sendNotification(subscriber.NotificationURL, payload, subscriber.GetKey())
 	}
@@ -49,9 +50,9 @@ func (n *Notifier) NotifySubscribers(subscribers []*models.ServiceInfo, payload 
 
 // NotifySubscriber sends notification to a single subscriber
 func (n *Notifier) NotifySubscriber(notificationURL string, payload *models.NotificationPayload) {
-	logger.Debug("Notifier: NotifySubscriber called",
-		zap.String("notification_url", notificationURL),
-		zap.String("event_type", string(payload.EventType)),
+	n.logger.Debugw("Notifier: NotifySubscriber called",
+		"notification_url", notificationURL,
+		"event_type", string(payload.EventType),
 	)
 	go n.sendNotification(notificationURL, payload, "")
 }
@@ -61,30 +62,30 @@ func (n *Notifier) sendNotification(url string, payload *models.NotificationPayl
 	ctx, cancel := context.WithTimeout(context.Background(), n.timeout)
 	defer cancel()
 
-	logFields := []zap.Field{
-		zap.String("notification_url", url),
-		zap.String("event_type", string(payload.EventType)),
-		zap.String("service_name", payload.ServiceName),
+	logArgs := []interface{}{
+		"notification_url", url,
+		"event_type", string(payload.EventType),
+		"service_name", payload.ServiceName,
 	}
 	if subscriberKey != "" {
-		logFields = append(logFields, zap.String("subscriber_key", subscriberKey))
+		logArgs = append(logArgs, "subscriber_key", subscriberKey)
 	}
 
-	logger.Debug("Notifier: Sending HTTP POST notification", logFields...)
+	n.logger.Debugw("Notifier: Sending HTTP POST notification", logArgs...)
 
 	// Marshal payload to JSON
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
-		logger.Error("Notifier: Failed to marshal notification payload",
-			append(logFields, zap.Error(err))...)
+		n.logger.Errorw("Notifier: Failed to marshal notification payload",
+			append(logArgs, "error", err)...)
 		return
 	}
 
 	// Create HTTP request
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		logger.Error("Notifier: Failed to create notification request",
-			append(logFields, zap.Error(err))...)
+		n.logger.Errorw("Notifier: Failed to create notification request",
+			append(logArgs, "error", err)...)
 		return
 	}
 
@@ -93,21 +94,21 @@ func (n *Notifier) sendNotification(url string, payload *models.NotificationPayl
 	// Send request
 	resp, err := n.httpClient.Do(req)
 	if err != nil {
-		logger.Error("Notifier: Failed to send notification",
-			append(logFields, zap.Error(err))...)
+		n.logger.Errorw("Notifier: Failed to send notification",
+			append(logArgs, "error", err)...)
 		return
 	}
 	defer resp.Body.Close()
 
 	// Check response status
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		logger.Warn("Notifier: Notification returned non-success status",
-			append(logFields, zap.Int("status_code", resp.StatusCode))...)
+		n.logger.Warnw("Notifier: Notification returned non-success status",
+			append(logArgs, "status_code", resp.StatusCode)...)
 		return
 	}
 
-	logger.Info("Notifier: Successfully sent notification",
-		append(logFields, zap.Int("status_code", resp.StatusCode))...)
+	n.logger.Infow("Notifier: Successfully sent notification",
+		append(logArgs, "status_code", resp.StatusCode)...)
 }
 
 // BuildNotificationPayload creates a notification payload from service pods
@@ -135,37 +136,39 @@ type HealthChecker struct {
 	httpClient *http.Client
 	timeout    time.Duration
 	maxRetries int
+	logger     logger.Logger
 }
 
 // NewHealthChecker creates a new health checker
-func NewHealthChecker(timeout time.Duration, maxRetries int) *HealthChecker {
+func NewHealthChecker(timeout time.Duration, maxRetries int, log logger.Logger) *HealthChecker {
 	return &HealthChecker{
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
 		timeout:    timeout,
 		maxRetries: maxRetries,
+		logger:     log,
 	}
 }
 
 // CheckHealth performs health check with retries
 // Returns true if healthy, false if unhealthy
 func (hc *HealthChecker) CheckHealth(healthCheckURL string) bool {
-	logger.Debug("HealthChecker: Starting health check",
-		zap.String("health_check_url", healthCheckURL),
-		zap.Int("max_retries", hc.maxRetries),
-		zap.Duration("timeout", hc.timeout),
+	hc.logger.Debugw("HealthChecker: Starting health check",
+		"health_check_url", healthCheckURL,
+		"max_retries", hc.maxRetries,
+		"timeout", hc.timeout,
 	)
 
 	for attempt := 0; attempt <= hc.maxRetries; attempt++ {
 		if attempt > 0 {
 			// Exponential backoff: 1s, 2s, 4s...
 			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
-			logger.Debug("HealthChecker: Retrying after backoff",
-				zap.String("health_check_url", healthCheckURL),
-				zap.Int("attempt", attempt),
-				zap.Int("max_retries", hc.maxRetries),
-				zap.Duration("backoff", backoff),
+			hc.logger.Debugw("HealthChecker: Retrying after backoff",
+				"health_check_url", healthCheckURL,
+				"attempt", attempt,
+				"max_retries", hc.maxRetries,
+				"backoff", backoff,
 			)
 			time.Sleep(backoff)
 		}
@@ -174,10 +177,10 @@ func (hc *HealthChecker) CheckHealth(healthCheckURL string) bool {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthCheckURL, nil)
 		if err != nil {
 			cancel()
-			logger.Error("HealthChecker: Failed to create health check request",
-				zap.String("health_check_url", healthCheckURL),
-				zap.Int("attempt", attempt+1),
-				zap.Error(err),
+			hc.logger.Errorw("HealthChecker: Failed to create health check request",
+				"health_check_url", healthCheckURL,
+				"attempt", attempt+1,
+				"error", err,
 			)
 			continue
 		}
@@ -186,11 +189,11 @@ func (hc *HealthChecker) CheckHealth(healthCheckURL string) bool {
 		cancel()
 
 		if err != nil {
-			logger.Warn("HealthChecker: Health check request failed",
-				zap.String("health_check_url", healthCheckURL),
-				zap.Int("attempt", attempt+1),
-				zap.Int("total_attempts", hc.maxRetries+1),
-				zap.Error(err),
+			hc.logger.Warnw("HealthChecker: Health check request failed",
+				"health_check_url", healthCheckURL,
+				"attempt", attempt+1,
+				"total_attempts", hc.maxRetries+1,
+				"error", err,
 			)
 			continue
 		}
@@ -199,25 +202,25 @@ func (hc *HealthChecker) CheckHealth(healthCheckURL string) bool {
 
 		// Consider 2xx as healthy
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			logger.Debug("HealthChecker: Health check passed",
-				zap.String("health_check_url", healthCheckURL),
-				zap.Int("status_code", resp.StatusCode),
-				zap.Int("attempt", attempt+1),
+			hc.logger.Debugw("HealthChecker: Health check passed",
+				"health_check_url", healthCheckURL,
+				"status_code", resp.StatusCode,
+				"attempt", attempt+1,
 			)
 			return true
 		}
 
-		logger.Warn("HealthChecker: Health check returned unhealthy status",
-			zap.String("health_check_url", healthCheckURL),
-			zap.Int("attempt", attempt+1),
-			zap.Int("total_attempts", hc.maxRetries+1),
-			zap.Int("status_code", resp.StatusCode),
+		hc.logger.Warnw("HealthChecker: Health check returned unhealthy status",
+			"health_check_url", healthCheckURL,
+			"attempt", attempt+1,
+			"total_attempts", hc.maxRetries+1,
+			"status_code", resp.StatusCode,
 		)
 	}
 
-	logger.Error("HealthChecker: Health check failed after all retries",
-		zap.String("health_check_url", healthCheckURL),
-		zap.Int("total_attempts", hc.maxRetries+1),
+	hc.logger.Errorw("HealthChecker: Health check failed after all retries",
+		"health_check_url", healthCheckURL,
+		"total_attempts", hc.maxRetries+1,
 	)
 	return false
 }
