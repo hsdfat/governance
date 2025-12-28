@@ -691,6 +691,128 @@ func TestClient_StopHeartbeat(t *testing.T) {
 	}
 }
 
+func TestCreateSubscribedServicesHandler(t *testing.T) {
+	// Create client
+	client := createTestClient("http://localhost:8080")
+
+	// Add some pods for subscribed services
+	client.UpdatePodInfo("order-service", []models.PodInfo{
+		createSamplePodInfo("order-pod-1", models.StatusHealthy),
+		createSamplePodInfo("order-pod-2", models.StatusHealthy),
+	})
+
+	client.UpdatePodInfo("payment-service", []models.PodInfo{
+		createSamplePodInfo("payment-pod-1", models.StatusHealthy),
+	})
+
+	// Create test server with subscribed services handler
+	handler := client.CreateSubscribedServicesHandler()
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	// Test GET request
+	resp, err := http.Get(server.URL)
+	if err != nil {
+		t.Fatalf("Failed to make GET request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Check status code
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", resp.StatusCode)
+	}
+
+	// Check content type
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "application/json" {
+		t.Errorf("Expected Content-Type 'application/json', got '%s'", contentType)
+	}
+
+	// Parse response
+	var subsResp SubscribedServicesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&subsResp); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	// Verify response
+	if subsResp.ServiceName != "test-service" {
+		t.Errorf("Expected service name 'test-service', got '%s'", subsResp.ServiceName)
+	}
+
+	if subsResp.PodName != "test-pod-1" {
+		t.Errorf("Expected pod name 'test-pod-1', got '%s'", subsResp.PodName)
+	}
+
+	if len(subsResp.SubscribedServices) != 2 {
+		t.Fatalf("Expected 2 subscribed services, got %d", len(subsResp.SubscribedServices))
+	}
+
+	// Check order-service pods
+	orderPods, hasOrder := subsResp.SubscribedServices["order-service"]
+	if !hasOrder {
+		t.Error("Expected order-service in subscribed services")
+	}
+	if len(orderPods) != 2 {
+		t.Errorf("Expected 2 order-service pods, got %d", len(orderPods))
+	}
+
+	// Check payment-service pods
+	paymentPods, hasPayment := subsResp.SubscribedServices["payment-service"]
+	if !hasPayment {
+		t.Error("Expected payment-service in subscribed services")
+	}
+	if len(paymentPods) != 1 {
+		t.Errorf("Expected 1 payment-service pod, got %d", len(paymentPods))
+	}
+
+	// Verify timestamp is present
+	if subsResp.Timestamp == "" {
+		t.Error("Expected timestamp to be present in response")
+	}
+}
+
+func TestCreateSubscribedServicesHandler_MethodNotAllowed(t *testing.T) {
+	client := createTestClient("http://localhost:8080")
+	handler := client.CreateSubscribedServicesHandler()
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	// Test POST request (should not be allowed)
+	resp, err := http.Post(server.URL, "application/json", nil)
+	if err != nil {
+		t.Fatalf("Failed to make POST request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405, got %d", resp.StatusCode)
+	}
+}
+
+func TestCreateSubscribedServicesHandler_EmptyServices(t *testing.T) {
+	client := createTestClient("http://localhost:8080")
+
+	// No subscribed services
+	handler := client.CreateSubscribedServicesHandler()
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL)
+	if err != nil {
+		t.Fatalf("Failed to make GET request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var subsResp SubscribedServicesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&subsResp); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	if len(subsResp.SubscribedServices) != 0 {
+		t.Errorf("Expected 0 subscribed services, got %d", len(subsResp.SubscribedServices))
+	}
+}
+
 // Helper function to check if string contains substring
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
@@ -704,4 +826,258 @@ func indexOf(s, substr string) int {
 		}
 	}
 	return -1
+}
+
+func TestClient_CheckDiff_NilMaps(t *testing.T) {
+	// Test with both nil
+	created, updated, deleted := CheckDiff(nil, nil)
+	if len(created) != 0 || len(updated) != 0 || len(deleted) != 0 {
+		t.Errorf("Expected 0 events with both nil maps, got created=%d, updated=%d, deleted=%d", len(created), len(updated), len(deleted))
+	}
+
+	// Test with old nil
+	newPods := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.1", Port: 8080},
+	}
+	created, updated, deleted = CheckDiff(nil, newPods)
+	if len(created) != 1 {
+		t.Fatalf("Expected 1 created event, got %d", len(created))
+	}
+	if len(updated) != 0 || len(deleted) != 0 {
+		t.Errorf("Expected no updated or deleted events, got updated=%d, deleted=%d", len(updated), len(deleted))
+	}
+	if created[0].Event != "create" {
+		t.Errorf("Expected 'create' event, got '%s'", created[0].Event)
+	}
+	if created[0].Name != "pod-1" {
+		t.Errorf("Expected pod name 'pod-1', got '%s'", created[0].Name)
+	}
+
+	// Test with new nil
+	oldPods := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.1", Port: 8080},
+	}
+	created, updated, deleted = CheckDiff(oldPods, nil)
+	if len(deleted) != 1 {
+		t.Fatalf("Expected 1 deleted event, got %d", len(deleted))
+	}
+	if len(created) != 0 || len(updated) != 0 {
+		t.Errorf("Expected no created or updated events, got created=%d, updated=%d", len(created), len(updated))
+	}
+	if deleted[0].Event != "delete" {
+		t.Errorf("Expected 'delete' event, got '%s'", deleted[0].Event)
+	}
+	if deleted[0].Name != "pod-1" {
+		t.Errorf("Expected pod name 'pod-1', got '%s'", deleted[0].Name)
+	}
+}
+
+func TestClient_CheckDiff_CreateEvents(t *testing.T) {
+	old := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.1", Port: 8080},
+	}
+
+	new := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.1", Port: 8080},
+		"pod-2": {Name: "pod-2", Ip: "10.0.0.2", Port: 8080},
+		"pod-3": {Name: "pod-3", Ip: "10.0.0.3", Port: 8080},
+	}
+
+	created, updated, deleted := CheckDiff(old, new)
+
+	// Should have 2 create events (pod-2 and pod-3)
+	if len(created) != 2 {
+		t.Fatalf("Expected 2 create events, got %d", len(created))
+	}
+	if len(updated) != 0 || len(deleted) != 0 {
+		t.Errorf("Expected no updated or deleted events, got updated=%d, deleted=%d", len(updated), len(deleted))
+	}
+
+	for _, event := range created {
+		if event.Name != "pod-2" && event.Name != "pod-3" {
+			t.Errorf("Unexpected create event for pod: %s", event.Name)
+		}
+	}
+}
+
+func TestClient_CheckDiff_DeleteEvents(t *testing.T) {
+	old := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.1", Port: 8080},
+		"pod-2": {Name: "pod-2", Ip: "10.0.0.2", Port: 8080},
+		"pod-3": {Name: "pod-3", Ip: "10.0.0.3", Port: 8080},
+	}
+
+	new := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.1", Port: 8080},
+	}
+
+	created, updated, deleted := CheckDiff(old, new)
+
+	// Should have 2 delete events (pod-2 and pod-3)
+	if len(deleted) != 2 {
+		t.Fatalf("Expected 2 delete events, got %d", len(deleted))
+	}
+	if len(created) != 0 || len(updated) != 0 {
+		t.Errorf("Expected no created or updated events, got created=%d, updated=%d", len(created), len(updated))
+	}
+
+	for _, event := range deleted {
+		if event.Name != "pod-2" && event.Name != "pod-3" {
+			t.Errorf("Unexpected delete event for pod: %s", event.Name)
+		}
+	}
+}
+
+func TestClient_CheckDiff_UpdateEvents_IPChange(t *testing.T) {
+	old := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.1", Port: 8080},
+		"pod-2": {Name: "pod-2", Ip: "10.0.0.2", Port: 8080},
+	}
+
+	new := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.10", Port: 8080}, // IP changed
+		"pod-2": {Name: "pod-2", Ip: "10.0.0.2", Port: 8080},  // No change
+	}
+
+	created, updated, deleted := CheckDiff(old, new)
+
+	// Should have 1 update event for pod-1
+	if len(updated) != 1 {
+		t.Fatalf("Expected 1 update event, got %d", len(updated))
+	}
+	if len(created) != 0 || len(deleted) != 0 {
+		t.Errorf("Expected no created or deleted events, got created=%d, deleted=%d", len(created), len(deleted))
+	}
+
+	if updated[0].Event != "update" {
+		t.Errorf("Expected 'update' event, got '%s'", updated[0].Event)
+	}
+	if updated[0].Name != "pod-1" {
+		t.Errorf("Expected pod name 'pod-1', got '%s'", updated[0].Name)
+	}
+}
+
+func TestClient_CheckDiff_UpdateEvents_PortChange(t *testing.T) {
+	old := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.1", Port: 8080},
+		"pod-2": {Name: "pod-2", Ip: "10.0.0.2", Port: 8080},
+	}
+
+	new := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.1", Port: 9090}, // Port changed
+		"pod-2": {Name: "pod-2", Ip: "10.0.0.2", Port: 8080}, // No change
+	}
+
+	created, updated, deleted := CheckDiff(old, new)
+
+	// Should have 1 update event for pod-1
+	if len(updated) != 1 {
+		t.Fatalf("Expected 1 update event, got %d", len(updated))
+	}
+	if len(created) != 0 || len(deleted) != 0 {
+		t.Errorf("Expected no created or deleted events, got created=%d, deleted=%d", len(created), len(deleted))
+	}
+
+	if updated[0].Event != "update" {
+		t.Errorf("Expected 'update' event, got '%s'", updated[0].Event)
+	}
+	if updated[0].Name != "pod-1" {
+		t.Errorf("Expected pod name 'pod-1', got '%s'", updated[0].Name)
+	}
+}
+
+func TestClient_CheckDiff_UpdateEvents_BothChange(t *testing.T) {
+	old := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.1", Port: 8080},
+	}
+
+	new := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.10", Port: 9090}, // Both IP and Port changed
+	}
+
+	created, updated, deleted := CheckDiff(old, new)
+
+	// Should have 1 update event for pod-1
+	if len(updated) != 1 {
+		t.Fatalf("Expected 1 update event, got %d", len(updated))
+	}
+	if len(created) != 0 || len(deleted) != 0 {
+		t.Errorf("Expected no created or deleted events, got created=%d, deleted=%d", len(created), len(deleted))
+	}
+
+	if updated[0].Event != "update" {
+		t.Errorf("Expected 'update' event, got '%s'", updated[0].Event)
+	}
+	if updated[0].Name != "pod-1" {
+		t.Errorf("Expected pod name 'pod-1', got '%s'", updated[0].Name)
+	}
+}
+
+func TestClient_CheckDiff_NoChanges(t *testing.T) {
+	old := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.1", Port: 8080},
+		"pod-2": {Name: "pod-2", Ip: "10.0.0.2", Port: 8080},
+	}
+
+	new := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.1", Port: 8080},
+		"pod-2": {Name: "pod-2", Ip: "10.0.0.2", Port: 8080},
+	}
+
+	created, updated, deleted := CheckDiff(old, new)
+
+	// Should have no events
+	if len(created) != 0 || len(updated) != 0 || len(deleted) != 0 {
+		t.Errorf("Expected 0 events, got created=%d, updated=%d, deleted=%d", len(created), len(updated), len(deleted))
+	}
+}
+
+func TestClient_CheckDiff_MixedEvents(t *testing.T) {
+	old := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.1", Port: 8080},
+		"pod-2": {Name: "pod-2", Ip: "10.0.0.2", Port: 8080},
+		"pod-3": {Name: "pod-3", Ip: "10.0.0.3", Port: 8080},
+	}
+
+	new := map[string]Pod{
+		"pod-1": {Name: "pod-1", Ip: "10.0.0.10", Port: 8080}, // Updated
+		"pod-2": {Name: "pod-2", Ip: "10.0.0.2", Port: 8080},  // No change
+		"pod-4": {Name: "pod-4", Ip: "10.0.0.4", Port: 8080},  // Created
+		// pod-3 deleted
+	}
+
+	created, updated, deleted := CheckDiff(old, new)
+
+	// Should have 3 events: 1 update, 1 create, 1 delete
+	if len(created) != 1 {
+		t.Errorf("Expected 1 create event, got %d", len(created))
+	}
+	if len(updated) != 1 {
+		t.Errorf("Expected 1 update event, got %d", len(updated))
+	}
+	if len(deleted) != 1 {
+		t.Errorf("Expected 1 delete event, got %d", len(deleted))
+	}
+
+	// Verify specific events
+	if len(created) > 0 && created[0].Name != "pod-4" {
+		t.Errorf("Expected create event for 'pod-4', got '%s'", created[0].Name)
+	}
+	if len(updated) > 0 && updated[0].Name != "pod-1" {
+		t.Errorf("Expected update event for 'pod-1', got '%s'", updated[0].Name)
+	}
+	if len(deleted) > 0 && deleted[0].Name != "pod-3" {
+		t.Errorf("Expected delete event for 'pod-3', got '%s'", deleted[0].Name)
+	}
+}
+
+func TestClient_CheckDiff_EmptyMaps(t *testing.T) {
+	old := map[string]Pod{}
+	new := map[string]Pod{}
+
+	created, updated, deleted := CheckDiff(old, new)
+
+	if len(created) != 0 || len(updated) != 0 || len(deleted) != 0 {
+		t.Errorf("Expected 0 events with empty maps, got created=%d, updated=%d, deleted=%d", len(created), len(updated), len(deleted))
+	}
 }

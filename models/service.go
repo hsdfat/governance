@@ -18,6 +18,12 @@ const (
 type ProviderID string
 
 const (
+	ServiceNameDiamGw string = "diam-gw"
+	ServiceNameHttpGw string = "http-gw"
+	ServiceNameEir    string = "eir"
+)
+
+const (
 	// EIR service providers
 	ProviderEIRDiameter ProviderID = "eir-diameter"
 	ProviderEIRHTTP     ProviderID = "eir-http"
@@ -50,18 +56,18 @@ type ProviderInfo struct {
 
 // Subscription represents a subscription to a service with optional provider filtering
 type Subscription struct {
-	ServiceName string   `json:"service_name"`            // Service to subscribe to
-	ProviderIDs []string `json:"provider_ids,omitempty"`  // Optional: specific provider IDs to subscribe to (empty = all providers)
+	ServiceName string   `json:"service_name"`           // Service to subscribe to
+	ProviderIDs []string `json:"provider_ids,omitempty"` // Optional: specific provider IDs to subscribe to (empty = all providers)
 }
 
 // ServiceRegistration represents a service registration request
 type ServiceRegistration struct {
-	ServiceName      string         `json:"service_name"`
-	PodName          string         `json:"pod_name"`
-	Providers        []ProviderInfo `json:"providers"`
-	HealthCheckURL   string         `json:"health_check_url"`
-	NotificationURL  string         `json:"notification_url"`
-	Subscriptions    []Subscription `json:"subscriptions"` // List of service subscriptions with optional provider filtering
+	ServiceName     string         `json:"service_name"`
+	PodName         string         `json:"pod_name"`
+	Providers       []ProviderInfo `json:"providers"`
+	HealthCheckURL  string         `json:"health_check_url"`
+	NotificationURL string         `json:"notification_url"`
+	Subscriptions   []Subscription `json:"subscriptions"` // List of service subscriptions with optional provider filtering
 }
 
 // ServiceStatus represents the health status of a service
@@ -75,17 +81,17 @@ const (
 
 // ServiceInfo represents the internal service information stored in registry
 type ServiceInfo struct {
-	ServiceName            string
-	PodName                string
-	Providers              []ProviderInfo
-	HealthCheckURL         string
-	NotificationURL        string
-	Subscriptions          []Subscription
-	Status                 ServiceStatus
-	LastHealthCheck        time.Time
-	RegisteredAt           time.Time
-	ConsecutiveFailures    int       // Number of consecutive health check failures
-	FirstFailureAt         time.Time // Timestamp of first failure in current streak
+	ServiceName         string
+	PodName             string
+	Providers           []ProviderInfo
+	HealthCheckURL      string
+	NotificationURL     string
+	Subscriptions       []Subscription
+	Status              ServiceStatus
+	LastHealthCheck     time.Time
+	RegisteredAt        time.Time
+	ConsecutiveFailures int       // Number of consecutive health check failures
+	FirstFailureAt      time.Time // Timestamp of first failure in current streak
 }
 
 // GetKey returns a unique key for the service (service_name:pod_name)
@@ -95,11 +101,11 @@ func (s *ServiceInfo) GetKey() string {
 
 // RegistrationResponse represents the response returned when a service registers
 type RegistrationResponse struct {
-	Status             string                    `json:"status"`
-	Message            string                    `json:"message"`
-	ServiceName        string                    `json:"service_name"`
-	Pods               []PodInfo                 `json:"pods"`                 // Pods of the registered service
-	SubscribedServices map[string][]PodInfo      `json:"subscribed_services"`  // Pods of services this client subscribed to
+	Status             string               `json:"status"`
+	Message            string               `json:"message"`
+	ServiceName        string               `json:"service_name"`
+	Pods               []PodInfo            `json:"pods"`                // Pods of the registered service
+	SubscribedServices map[string][]PodInfo `json:"subscribed_services"` // Pods of services this client subscribed to
 }
 
 // ErrorResponse represents an error response from the manager

@@ -6,12 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/chronnie/governance/models"
+	"github.com/hsdfat/go-zlog/logger"
+	"go.uber.org/zap"
 )
 
 // Client is a helper for services to interact with the governance manager
@@ -20,6 +21,7 @@ type Client struct {
 	httpClient  *http.Client
 	serviceName string
 	podName     string
+	logger      logger.LoggerI
 
 	// Pod info storage
 	mu                 sync.RWMutex
@@ -33,16 +35,18 @@ type Client struct {
 	stopHeartbeat     chan struct{}
 	heartbeatStopped  chan struct{}
 	registration      *models.ServiceRegistration
+	NotifyFunc        func(payload *models.NotificationPayload)
 }
 
 // ClientConfig contains configuration for the client
 type ClientConfig struct {
-	ManagerURL        string        // Manager URL (e.g., "http://manager:8080")
-	ServiceName       string        // This service's name
-	PodName           string        // This pod's name
-	Timeout           time.Duration // HTTP request timeout
-	HeartbeatInterval time.Duration // Interval between heartbeats (default: 30s)
-	HeartbeatTimeout  time.Duration // Time before considering manager unreachable (default: 90s)
+	ManagerURL        string         // Manager URL (e.g., "http://manager:8080")
+	ServiceName       string         // This service's name
+	PodName           string         // This pod's name
+	Timeout           time.Duration  // HTTP request timeout
+	HeartbeatInterval time.Duration  // Interval between heartbeats (default: 30s)
+	HeartbeatTimeout  time.Duration  // Time before considering manager unreachable (default: 90s)
+	Logger            logger.LoggerI // Optional logger (default: uses stdlib log)
 }
 
 // NewClient creates a new governance client
@@ -57,6 +61,12 @@ func NewClient(config *ClientConfig) *Client {
 		config.HeartbeatTimeout = 90 * time.Second
 	}
 
+	// Use provided logger or create a default one
+	clientLogger := config.Logger
+	if clientLogger == nil {
+		clientLogger = &logger.Logger{SugaredLogger: logger.NewLogger().WithOptions(zap.AddCallerSkip(1))}
+	}
+
 	return &Client{
 		managerURL: config.ManagerURL,
 		httpClient: &http.Client{
@@ -64,6 +74,7 @@ func NewClient(config *ClientConfig) *Client {
 		},
 		serviceName:        config.ServiceName,
 		podName:            config.PodName,
+		logger:             clientLogger,
 		ownPods:            make([]models.PodInfo, 0),
 		subscribedServices: make(map[string][]models.PodInfo),
 		heartbeatInterval:  config.HeartbeatInterval,
@@ -141,9 +152,24 @@ func (c *Client) Register(registration *models.ServiceRegistration) (*models.Reg
 	c.registration = registration
 	c.lastHeartbeatTime = time.Now()
 	c.mu.Unlock()
+	if c.NotifyFunc != nil {
+		// Call the registration callback with initial pod info
+		for pod, v := range regResp.SubscribedServices {
+			go c.NotifyFunc(&models.NotificationPayload{
+				ServiceName: pod,
+				EventType:   "initial_registration",
+				Pods:        v,
+				Timestamp:   time.Now(),
+			})
+		}
 
-	log.Printf("[Client] Successfully registered: service=%s, pod=%s, total_pods=%d, subscribed_services=%d",
-		registration.ServiceName, registration.PodName, len(regResp.Pods), len(regResp.SubscribedServices))
+	}
+
+	c.logger.Infow("Successfully registered",
+		"service", registration.ServiceName,
+		"pod", registration.PodName,
+		"total_pods", len(regResp.Pods),
+		"subscribed_services", len(regResp.SubscribedServices))
 
 	return &regResp, nil
 }
@@ -175,7 +201,7 @@ func (c *Client) UnregisterService(serviceName, podName string) error {
 		return fmt.Errorf("unregister request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	log.Printf("[Client] Successfully unregistered: service=%s, pod=%s", serviceName, podName)
+	c.logger.Infow("Successfully unregistered", "service", serviceName, "pod", podName)
 	return nil
 }
 
@@ -297,12 +323,12 @@ func (c *Client) UpdatePodInfo(serviceName string, pods []models.PodInfo) {
 		// Update own pods
 		c.ownPods = make([]models.PodInfo, len(pods))
 		copy(c.ownPods, pods)
-		log.Printf("[Client] Updated own pod info: service=%s, pods=%d", serviceName, len(pods))
+		c.logger.Debugw("Updated own pod info", "service", serviceName, "pods", len(pods))
 	} else {
 		// Update subscribed service pods
 		c.subscribedServices[serviceName] = make([]models.PodInfo, len(pods))
 		copy(c.subscribedServices[serviceName], pods)
-		log.Printf("[Client] Updated subscribed service pod info: service=%s, pods=%d", serviceName, len(pods))
+		c.logger.Debugw("Updated subscribed service pod info", "service", serviceName, "pods", len(pods))
 	}
 }
 
@@ -347,7 +373,7 @@ func (c *Client) SendHeartbeat() error {
 	c.lastHeartbeatTime = time.Now()
 	c.mu.Unlock()
 
-	log.Printf("[Client] Heartbeat sent successfully: service=%s, pod=%s", c.serviceName, c.podName)
+	c.logger.Debugw("Heartbeat sent successfully", "service", c.serviceName, "pod", c.podName)
 	return nil
 }
 
@@ -360,6 +386,47 @@ func (c *Client) StartHeartbeat() {
 func (c *Client) StopHeartbeat() {
 	close(c.stopHeartbeat)
 	<-c.heartbeatStopped
+}
+
+// StartHTTPServerWithClient starts an HTTP server with all handlers including subscribed services
+// This is a convenience method that automatically includes the subscribed services endpoint
+func (c *Client) StartHTTPServerWithClient(config HTTPServerConfig) error {
+	if config.NotificationURL == "" {
+		config.NotificationURL = "/notify"
+	}
+	if config.HeartbeatURL == "" {
+		config.HeartbeatURL = "/heartbeat"
+	}
+	if config.SubscribedServicesURL == "" {
+		config.SubscribedServicesURL = "/subscribed-services"
+	}
+
+	mux := http.NewServeMux()
+
+	// Register notification handler
+	mux.HandleFunc(config.NotificationURL, c.CreateNotificationHandler())
+
+	// Register heartbeat handler
+	mux.HandleFunc(config.HeartbeatURL, c.CreateHeartbeatHandler(config.HeartbeatHandler))
+
+	// Register subscribed services handler (this is the key addition)
+	mux.HandleFunc(config.SubscribedServicesURL, c.CreateSubscribedServicesHandler())
+
+	// Register health check
+	mux.HandleFunc("/health", c.CreateHealthCheckHandler())
+
+	server := &http.Server{
+		Addr:    fmt.Sprintf(":%d", config.Port),
+		Handler: mux,
+	}
+
+	c.logger.Infow("Starting HTTP server",
+		"port", config.Port,
+		"notification_url", config.NotificationURL,
+		"heartbeat_url", config.HeartbeatURL,
+		"subscribed_services_url", config.SubscribedServicesURL,
+		"health_url", "/health")
+	return server.ListenAndServe()
 }
 
 // heartbeatLoop runs in the background and sends heartbeats periodically
@@ -378,112 +445,334 @@ func (c *Client) heartbeatLoop() {
 			c.mu.RUnlock()
 
 			if timeSinceLastHeartbeat > c.heartbeatTimeout {
-				log.Printf("[Client] Heartbeat timeout exceeded (%v > %v), re-registering: service=%s, pod=%s",
-					timeSinceLastHeartbeat, c.heartbeatTimeout, c.serviceName, c.podName)
+				c.logger.Warnw("Heartbeat timeout exceeded, re-registering",
+					"time_since_last", timeSinceLastHeartbeat,
+					"timeout", c.heartbeatTimeout,
+					"service", c.serviceName,
+					"pod", c.podName)
 
 				if reg != nil {
 					if _, err := c.Register(reg); err != nil {
-						log.Printf("[Client] Failed to re-register after heartbeat timeout: %v", err)
+						c.logger.Errorw("Failed to re-register after heartbeat timeout", "error", err)
 					} else {
-						log.Printf("[Client] Successfully re-registered after heartbeat timeout")
+						c.logger.Infow("Successfully re-registered after heartbeat timeout")
 					}
 				} else {
-					log.Printf("[Client] Cannot re-register: no registration data stored")
+					c.logger.Warnw("Cannot re-register: no registration data stored")
 				}
 			} else {
 				// Send heartbeat
 				if err := c.SendHeartbeat(); err != nil {
-					log.Printf("[Client] Failed to send heartbeat: %v", err)
+					c.logger.Errorw("Failed to send heartbeat", "error", err)
 				}
 			}
 
 		case <-c.stopHeartbeat:
-			log.Printf("[Client] Stopping heartbeat goroutine: service=%s, pod=%s", c.serviceName, c.podName)
+			c.logger.Infow("Stopping heartbeat goroutine", "service", c.serviceName, "pod", c.podName)
 			return
 		}
 	}
 }
 
-// NotificationServer helps services receive notifications from the manager
-type NotificationServer struct {
-	port    int
-	handler NotificationHandler
-	server  *http.Server
+// HTTPServerConfig contains configuration for the HTTP server
+type HTTPServerConfig struct {
+	Port                  int                 // Port to listen on
+	NotificationURL       string              // Path for notification endpoint (default: "/notify")
+	HeartbeatURL          string              // Path for heartbeat endpoint (default: "/heartbeat")
+	SubscribedServicesURL string              // Path for subscribed services endpoint (default: "/subscribed-services")
+	NotificationHandler   NotificationHandler // Handler for notifications
+	HeartbeatHandler      func() error        // Optional custom heartbeat handler
 }
 
-// NewNotificationServer creates a new notification server
-func NewNotificationServer(port int, handler NotificationHandler) *NotificationServer {
-	ns := &NotificationServer{
-		port:    port,
-		handler: handler,
+// CreateNotificationHandler creates an HTTP handler function for receiving notifications
+// This can be integrated into existing HTTP servers (gin, chi, stdlib, etc.)
+func (c *Client) CreateNotificationHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		clientIP := r.RemoteAddr
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			clientIP = forwarded
+		}
+
+		if r.Method != http.MethodPost {
+			c.logger.Warnw("Method not allowed", "handler", "notification", "method", r.Method, "client", clientIP)
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Parse notification payload
+		var payload models.NotificationPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			c.logger.Errorw("Failed to decode notification", "error", err, "client", clientIP)
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		c.logger.Infow("Received notification",
+			"service", payload.ServiceName,
+			"event", payload.EventType,
+			"pods", len(payload.Pods),
+			"client", clientIP,
+			"timestamp", payload.Timestamp.Format(time.RFC3339))
+
+		// Log detailed pod information at debug level
+		for i, pod := range payload.Pods {
+			c.logger.Debugw("Pod info",
+				"index", i,
+				"name", pod.PodName,
+				"status", pod.Status,
+				"providers", len(pod.Providers))
+
+		}
+		c.mu.Lock()
+		// Update stored pod info
+		c.subscribedServices[payload.ServiceName] = payload.Pods
+		c.mu.Unlock()
+		// Call handler asynchronously
+		if c.NotifyFunc != nil {
+			go c.NotifyFunc(&payload)
+		}
+
+		// Return success
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+		c.logger.Debugw("Response sent", "handler", "notification", "status", 200, "client", clientIP)
+	}
+}
+
+// CreateHeartbeatHandler creates an HTTP handler function for receiving heartbeat requests
+// This can be integrated into existing HTTP servers (gin, chi, stdlib, etc.)
+func (c *Client) CreateHeartbeatHandler(handler func() error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		clientIP := r.RemoteAddr
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			clientIP = forwarded
+		}
+
+		if r.Method != http.MethodPost && r.Method != http.MethodGet {
+			c.logger.Warnw("Method not allowed", "handler", "heartbeat", "method", r.Method, "client", clientIP)
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		c.logger.Debugw("Heartbeat received",
+			"method", r.Method,
+			"client", clientIP,
+			"timestamp", time.Now().Format(time.RFC3339))
+
+		// Call custom handler if provided
+		if handler != nil {
+			if err := handler(); err != nil {
+				c.logger.Errorw("Custom heartbeat handler failed", "error", err, "client", clientIP)
+				http.Error(w, "Heartbeat handler error", http.StatusInternalServerError)
+				return
+			}
+			c.logger.Debugw("Custom heartbeat handler executed successfully", "client", clientIP)
+		}
+
+		// Return success
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":    "ok",
+			"timestamp": time.Now().Format(time.RFC3339),
+		})
+		c.logger.Debugw("Response sent", "handler", "heartbeat", "status", 200, "client", clientIP)
+	}
+}
+
+// CreateHealthCheckHandler creates an HTTP handler function for health checks
+// This can be integrated into existing HTTP servers (gin, chi, stdlib, etc.)
+func (c *Client) CreateHealthCheckHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		clientIP := r.RemoteAddr
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			clientIP = forwarded
+		}
+
+		c.logger.Debugw("Health check requested", "method", r.Method, "client", clientIP)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":    "healthy",
+			"timestamp": time.Now().Format(time.RFC3339),
+		})
+	}
+}
+
+// SubscribedServicesResponse represents the response from the subscribed services endpoint
+type SubscribedServicesResponse struct {
+	ServiceName        string                      `json:"service_name"`
+	PodName            string                      `json:"pod_name"`
+	SubscribedServices map[string][]models.PodInfo `json:"subscribed_services"`
+	Timestamp          string                      `json:"timestamp"`
+}
+
+// CreateSubscribedServicesHandler creates an HTTP handler function for listing subscribed services and their pods
+// This can be integrated into existing HTTP servers (gin, chi, stdlib, etc.)
+func (c *Client) CreateSubscribedServicesHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		clientIP := r.RemoteAddr
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			clientIP = forwarded
+		}
+
+		if r.Method != http.MethodGet {
+			c.logger.Warnw("Method not allowed", "handler", "subscribed_services", "method", r.Method, "client", clientIP)
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		serviceName := r.URL.Query().Get("service-name")
+		provideId := r.URL.Query().Get("provide-id")
+		if serviceName != "" && provideId != "" {
+			c.logger.Infow("query for subscribed pod", "service-name", serviceName, "provide-id", provideId)
+
+			response := c.GetPodInfos(serviceName, provideId)
+			if len(response) == 0 {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			if err := json.NewEncoder(w).Encode(response); err != nil {
+				c.logger.Errorw("Failed to encode subscribed services response", "error", err, "client", clientIP)
+				return
+			}
+
+			c.logger.Debugw("Response sent", "handler", "subscribed_services", "services", len(response), "client", clientIP)
+			return
+		}
+
+		c.logger.Debugw("Subscribed services requested", "method", r.Method, "client", clientIP)
+
+		// Get all subscribed services with their pods
+		subscribedServices := c.GetAllSubscribedServices()
+
+		response := SubscribedServicesResponse{
+			ServiceName:        c.serviceName,
+			PodName:            c.podName,
+			SubscribedServices: subscribedServices,
+			Timestamp:          time.Now().Format(time.RFC3339),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			c.logger.Errorw("Failed to encode subscribed services response", "error", err, "client", clientIP)
+			return
+		}
+
+		c.logger.Debugw("Response sent", "handler", "subscribed_services", "services", len(subscribedServices), "client", clientIP)
+	}
+}
+
+type Pod struct {
+	Name string
+	Port uint16
+	Ip   string
+}
+
+func (c *Client) GetPodInfos(serviceName, provideId string) (pods map[string]Pod) {
+	podInfos, ok := c.subscribedServices[serviceName]
+	if !ok {
+		return nil
+	}
+	pods = make(map[string]Pod)
+
+	for _, pod := range podInfos {
+		providers := pod.Providers
+		for _, provide := range providers {
+			if provide.ProviderID == provideId {
+				pods[pod.PodName] = Pod{
+					Name: pod.PodName,
+					Ip:   provide.IP,
+					Port: uint16(provide.Port),
+				}
+			}
+		}
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/notify", ns.handleNotification)
-	mux.HandleFunc("/health", ns.handleHealth)
+	return
+}
 
-	ns.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: mux,
+func GetPodInfos(payload models.NotificationPayload, serviceName, provideId string) (pods map[string]Pod, err error) {
+	if payload.ServiceName != serviceName {
+		return nil, fmt.Errorf("service name mismatch: expected %s, got %s", serviceName, payload.ServiceName)
+	}
+	podInfos := payload.Pods
+	pods = make(map[string]Pod)
+
+	for _, pod := range podInfos {
+		providers := pod.Providers
+		for _, provide := range providers {
+			if provide.ProviderID == provideId {
+				pods[pod.PodName] = Pod{
+					Name: pod.PodName,
+					Ip:   provide.IP,
+					Port: uint16(provide.Port),
+				}
+			}
+		}
 	}
 
-	return ns
+	return pods, nil
 }
 
-// Start starts the notification server
-func (ns *NotificationServer) Start() error {
-	log.Printf("[NotificationServer] Starting on port %d", ns.port)
-	return ns.server.ListenAndServe()
+// Event type constants
+const (
+	EventTypeCreate = "create"
+	EventTypeUpdate = "update"
+	EventTypeDelete = "delete"
+)
+
+type PodEvent struct {
+	Event string // create/update/delete
+	Name  string
 }
 
-// Stop gracefully stops the notification server
-func (ns *NotificationServer) Stop(ctx context.Context) error {
-	log.Println("[NotificationServer] Stopping...")
-	return ns.server.Shutdown(ctx)
-}
+func CheckDiff(old, new map[string]Pod) (created, updated, deleted []PodEvent) {
+	created = make([]PodEvent, 0)
+	updated = make([]PodEvent, 0)
+	deleted = make([]PodEvent, 0)
 
-// handleNotification handles incoming notification requests
-func (ns *NotificationServer) handleNotification(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+	// Handle nil maps
+	if old == nil {
+		old = make(map[string]Pod)
+	}
+	if new == nil {
+		new = make(map[string]Pod)
 	}
 
-	// Parse notification payload
-	var payload models.NotificationPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		log.Printf("[NotificationServer] Failed to decode notification: %v", err)
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
+	// Check for created and updated pods
+	for name, newPod := range new {
+		if oldPod, exists := old[name]; exists {
+			// Pod exists in both - check if it was updated
+			if oldPod.Ip != newPod.Ip || oldPod.Port != newPod.Port {
+				updated = append(updated, PodEvent{
+					Event: EventTypeUpdate,
+					Name:  name,
+				})
+			}
+		} else {
+			// Pod exists in new but not in old - created
+			created = append(created, PodEvent{
+				Event: EventTypeCreate,
+				Name:  name,
+			})
+		}
 	}
 
-	log.Printf("[NotificationServer] Received notification: service=%s, event=%s, pods=%d",
-		payload.ServiceName, payload.EventType, len(payload.Pods))
-
-	// Call handler
-	if ns.handler != nil {
-		go ns.handler(&payload)
+	// Check for deleted pods
+	for name := range old {
+		if _, exists := new[name]; !exists {
+			// Pod exists in old but not in new - deleted
+			deleted = append(deleted, PodEvent{
+				Event: EventTypeDelete,
+				Name:  name,
+			})
+		}
 	}
 
-	// Return success
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
-}
-
-// handleHealth handles health check requests
-func (ns *NotificationServer) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "healthy",
-	})
-}
-
-// GetNotificationURL returns the notification URL for this server
-func (ns *NotificationServer) GetNotificationURL(host string) string {
-	return fmt.Sprintf("http://%s:%d/notify", host, ns.port)
-}
-
-// GetHealthCheckURL returns the health check URL for this server
-func (ns *NotificationServer) GetHealthCheckURL(host string) string {
-	return fmt.Sprintf("http://%s:%d/health", host, ns.port)
+	return
 }
