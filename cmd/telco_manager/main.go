@@ -9,15 +9,17 @@ import (
 	"github.com/chronnie/governance/internal/config"
 	"github.com/chronnie/governance/manager"
 	"github.com/chronnie/governance/models"
+	"github.com/chronnie/governance/pkg/config/env"
 	"github.com/chronnie/governance/storage/postgres"
 )
 
 func main() {
 	log.Println("Starting Telco Governance Manager")
 	log.Println("Managing lifecycle for: http-gw, diam-gw, and eir services")
+	env.Init()	
 
 	// Load configuration
-	cfg, err := config.Load("")
+	cfg, err := config.Load(env.Env.ConfigFile)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}

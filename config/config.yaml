@@ -1,9 +1,5 @@
 # Governance Manager Configuration
 # This file overrides defaults from config.default.yaml
-# Environment variables with GOV_ prefix override these values
-
-server:
-  port: 8080
 
 database:
   host: 14.225.198.206
