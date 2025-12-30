@@ -1,12 +1,14 @@
 # Governance Manager Configuration
 # This file overrides defaults from config.default.yaml
+server:
+  port: 18000
 
 database:
-  host: 14.225.198.206
-  port: 5432
-  database: eir
-  username: adong
-  password: adong123
+  host: 127.0.0.1      # YugabyteDB on localhost (IPv4 explicit)
+  port: 5433           # YugabyteDB YSQL port
+  database: governance # Governance database in YugabyteDB
+  username: yugabyte   # YugabyteDB default user
+  password: ""         # No password for default user
   sslMode: disable
 
 manager:

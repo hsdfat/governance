@@ -42,12 +42,34 @@ func NewDatabaseStore(cfg Config) (*DatabaseStore, error) {
 		sslMode = "disable"
 	}
 
-	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		cfg.Host, cfg.Port, cfg.Username, cfg.Password, cfg.Database, sslMode)
+	// Use URL format for DSN (better compatibility with YugabyteDB than key=value format)
+	passwordPart := ""
+	if cfg.Password != "" {
+		passwordPart = ":" + cfg.Password
+	}
+	dsn := fmt.Sprintf("postgres://%s%s@%s:%d/%s?sslmode=%s",
+		cfg.Username, passwordPart, cfg.Host, cfg.Port, cfg.Database, sslMode)
 
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+
+	// Test the connection and verify we're connected to the correct database
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	// Verify we're connected to the correct database (important for YugabyteDB)
+	var actualDB string
+	if err := db.QueryRow("SELECT current_database()").Scan(&actualDB); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to verify database: %w", err)
+	}
+	if actualDB != cfg.Database {
+		db.Close()
+		return nil, fmt.Errorf("connected to wrong database: expected=%s, actual=%s", cfg.Database, actualDB)
 	}
 
 	// Set connection pool settings
@@ -147,13 +169,18 @@ func (d *DatabaseStore) SaveService(ctx context.Context, service *models.Service
 		last_health_check = EXCLUDED.last_health_check,
 		updated_at = CURRENT_TIMESTAMP`
 
-	_, err = d.db.ExecContext(ctx, query,
+	result, err := d.db.ExecContext(ctx, query,
 		key, service.ServiceName, service.PodName,
 		providersJSON, service.HealthCheckURL, service.NotificationURL,
 		subscriptionsJSON, service.Status, service.LastHealthCheck, service.RegisteredAt)
 
 	if err != nil {
 		return fmt.Errorf("failed to save service: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected != 1 {
+		return fmt.Errorf("expected 1 row affected, got %d", rowsAffected)
 	}
 
 	return nil

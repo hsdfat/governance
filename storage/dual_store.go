@@ -187,7 +187,12 @@ func (d *DualStore) SaveService(ctx context.Context, service *models.ServiceInfo
 
 	// Persist to database asynchronously if enabled
 	if d.db != nil {
-		go d.db.SaveService(context.Background(), service)
+		go func() {
+			if err := d.db.SaveService(context.Background(), service); err != nil {
+				// Log the error but don't fail the operation since cache succeeded
+				fmt.Printf("ERROR: Failed to persist service to database: %v (service_key=%s)\n", err, service.GetKey())
+			}
+		}()
 	}
 
 	return nil

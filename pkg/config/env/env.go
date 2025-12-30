@@ -22,7 +22,7 @@ func (e *EnvConfigs) DefaultValues() {
 	e.TargetGov = "127.0.0.1:36610"
 	e.Governance = true
 	e.ServiceIP = GetLocalIP()
-	e.ServicePort = 36110
+	e.ServicePort = 36010
 	e.ConfdExpose = false
 	e.ConfigFile = ""
 }

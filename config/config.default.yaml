@@ -2,11 +2,11 @@ server:
   port: 8080
 
 database:
-  host: localhost
-  port: 5432
-  database: governance_db
-  username: postgres
-  password: postgres
+  host: 127.0.0.1      # YugabyteDB on localhost (IPv4 explicit)
+  port: 5433           # YugabyteDB YSQL port
+  database: governance # Governance database
+  username: yugabyte   # YugabyteDB default user
+  password: ""         # No password for default user
   sslMode: disable
   maxOpenConns: 25
   maxIdleConns: 5

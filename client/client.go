@@ -168,6 +168,7 @@ func (c *Client) Register(registration *models.ServiceRegistration) (*models.Reg
 	c.logger.Infow("Successfully registered",
 		"service", registration.ServiceName,
 		"pod", registration.PodName,
+
 		"total_pods", len(regResp.Pods),
 		"subscribed_services", len(regResp.SubscribedServices))
 
