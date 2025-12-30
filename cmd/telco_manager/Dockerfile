@@ -10,7 +10,7 @@ RUN go mod download
 COPY . .
 
 # Build the telco manager
-WORKDIR /build/examples/telco_manager
+WORKDIR /build/cmd/telco_manager
 RUN CGO_ENABLED=0 GOOS=linux go build -o telco-manager main.go
 
 # Final stage
@@ -21,7 +21,7 @@ RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /build/examples/telco_manager/telco-manager .
+COPY --from=builder /build/cmd/telco_manager/telco-manager .
 
 # Expose HTTP port
 EXPOSE 8080
