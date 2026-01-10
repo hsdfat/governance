@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	eventqueue "github.com/chronnie/go-event-queue"
 	"github.com/chronnie/governance/internal/api"
 	"github.com/chronnie/governance/internal/auditor"
 	"github.com/chronnie/governance/internal/notifier"
@@ -17,6 +16,7 @@ import (
 	"github.com/chronnie/governance/pkg/logger"
 	"github.com/chronnie/governance/storage"
 	"github.com/chronnie/governance/storage/memory"
+	eventqueue "github.com/hsdfat/telco/equeue"
 )
 
 // Manager is the main governance manager component

@@ -1,13 +1,12 @@
 module github.com/chronnie/governance
 
-go 1.25.5
+go 1.25.2
 
 require (
-	github.com/chronnie/go-event-queue v1.0.2
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/google/uuid v1.6.0
 	github.com/hsdfat/go-zlog v0.0.3
-	github.com/hsdfat/telco v0.0.4
+	github.com/hsdfat/telco v0.0.5-0.20260110064706-87be845ac618
 	github.com/lib/pq v1.10.9
 	github.com/spf13/viper v1.21.0
 	go.mongodb.org/mongo-driver v1.17.1

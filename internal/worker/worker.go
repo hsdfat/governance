@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 
-	eventqueue "github.com/chronnie/go-event-queue"
 	"github.com/chronnie/governance/events"
 	"github.com/chronnie/governance/internal/auditor"
 	"github.com/chronnie/governance/internal/notifier"
@@ -11,6 +10,7 @@ import (
 	"github.com/chronnie/governance/models"
 	"github.com/chronnie/governance/pkg/logger"
 	"github.com/chronnie/governance/storage"
+	eventqueue "github.com/hsdfat/telco/equeue"
 )
 
 // EventWorker processes events from the queue using handlers
@@ -193,9 +193,9 @@ func (w *EventWorker) handleUnregister(ctx context.Context, event eventqueue.IEv
 
 		// Log auto-cleanup audit event
 		w.auditor.LogUnregister(ctx, serviceInfo.ServiceName, serviceInfo.PodName, models.AuditResultSuccess, map[string]interface{}{
-			"failure_limit":         w.config.HealthCheckFailureLimit,
-			"consecutive_failures":  deletedService.ConsecutiveFailures,
-			"failure_reason":        "exceeded health check failure limit",
+			"failure_limit":        w.config.HealthCheckFailureLimit,
+			"consecutive_failures": deletedService.ConsecutiveFailures,
+			"failure_reason":       "exceeded health check failure limit",
 		}, "")
 
 		// Get remaining pods of this service (after deletion)

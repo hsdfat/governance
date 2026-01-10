@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	eventqueue "github.com/chronnie/go-event-queue"
 	"github.com/chronnie/governance/internal/registry"
 	"github.com/chronnie/governance/models"
 	"github.com/chronnie/governance/pkg/logger"
 	"github.com/chronnie/governance/storage"
+	eventqueue "github.com/hsdfat/telco/equeue"
 )
 
 func setupTestHandler() (*Handler, *registry.Registry, eventqueue.IEventQueue) {
@@ -45,7 +45,7 @@ func TestRegisterHandlerSuccess(t *testing.T) {
 		},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
-		Subscriptions: []models.Subscription{{ServiceName: "other-service"}},
+		Subscriptions:   []models.Subscription{{ServiceName: "other-service"}},
 	}
 
 	jsonData, _ := json.Marshal(registration)
@@ -190,7 +190,7 @@ func TestServicesHandler(t *testing.T) {
 			Providers:       []models.ProviderInfo{{ProviderID: string(models.ProviderHTTP), Protocol: models.ProtocolHTTP, IP: "192.168.1.10", Port: 8080}},
 			HealthCheckURL:  "http://192.168.1.10:8080/health",
 			NotificationURL: "http://192.168.1.10:8080/notify",
-			Subscriptions: []models.Subscription{},
+			Subscriptions:   []models.Subscription{},
 		}
 		reg.Register(registration)
 	}
@@ -261,7 +261,7 @@ func TestValidateRegistration(t *testing.T) {
 		},
 		HealthCheckURL:  "http://192.168.1.10:8080/health",
 		NotificationURL: "http://192.168.1.10:8080/notify",
-		Subscriptions: []models.Subscription{},
+		Subscriptions:   []models.Subscription{},
 	}
 
 	err := handler.validateRegistration(validReg)

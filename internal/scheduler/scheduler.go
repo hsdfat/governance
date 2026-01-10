@@ -3,10 +3,10 @@ package scheduler
 import (
 	"time"
 
-	eventqueue "github.com/chronnie/go-event-queue"
 	"github.com/chronnie/governance/events"
 	"github.com/chronnie/governance/internal/registry"
 	"github.com/chronnie/governance/pkg/logger"
+	eventqueue "github.com/hsdfat/telco/equeue"
 )
 
 // HealthCheckScheduler periodically schedules health check events for all services

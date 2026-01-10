@@ -47,6 +47,39 @@ func NewDatabaseStore(cfg Config) (*DatabaseStore, error) {
 	if cfg.Password != "" {
 		passwordPart = ":" + cfg.Password
 	}
+
+	// First, connect to the default database to check if target database exists
+	defaultDB := "yugabyte" // YugabyteDB default database
+	defaultDSN := fmt.Sprintf("postgres://%s%s@%s:%d/%s?sslmode=%s",
+		cfg.Username, passwordPart, cfg.Host, cfg.Port, defaultDB, sslMode)
+
+	adminDB, err := sql.Open("postgres", defaultDSN)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open admin connection: %w", err)
+	}
+	defer adminDB.Close()
+
+	// Test admin connection
+	if err := adminDB.Ping(); err != nil {
+		return nil, fmt.Errorf("failed to ping admin database: %w", err)
+	}
+
+	// Check if target database exists
+	var exists bool
+	checkQuery := "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)"
+	if err := adminDB.QueryRow(checkQuery, cfg.Database).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("failed to check database existence: %w", err)
+	}
+
+	// Create database if it doesn't exist
+	if !exists {
+		createQuery := fmt.Sprintf("CREATE DATABASE %s", cfg.Database)
+		if _, err := adminDB.Exec(createQuery); err != nil {
+			return nil, fmt.Errorf("failed to create database %s: %w", cfg.Database, err)
+		}
+	}
+
+	// Now connect to the target database
 	dsn := fmt.Sprintf("postgres://%s%s@%s:%d/%s?sslmode=%s",
 		cfg.Username, passwordPart, cfg.Host, cfg.Port, cfg.Database, sslMode)
 

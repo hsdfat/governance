@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"time"
 
-	eventqueue "github.com/chronnie/go-event-queue"
 	"github.com/chronnie/governance/events"
 	"github.com/chronnie/governance/internal/registry"
 	"github.com/chronnie/governance/models"
 	"github.com/chronnie/governance/pkg/logger"
+	eventqueue "github.com/hsdfat/telco/equeue"
 )
 
 // Handler handles HTTP requests for the governance manager

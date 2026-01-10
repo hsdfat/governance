@@ -7,7 +7,7 @@ A Go library for service discovery and management in microservices architectures
 - **Service Registration**: Services register themselves with protocol endpoints (HTTP, TCP, PFCP, GTP, UDP)
 - **Subscription System**: Services can subscribe to other service groups for change notifications
 - **Health Checking**: Automatic periodic health checks with retry mechanism
-- **Event-Driven Architecture**: Uses [go-event-queue](https://github.com/chronnie/go-event-queue) for lock-free event processing
+- **Event-Driven Architecture**: Uses [go-event-queue](https://github.com/hsdfat/telco/equeue) for lock-free event processing
 - **Automatic Notifications**: Subscribers are notified when services register, unregister, or change health status
 - **Periodic Reconciliation**: Regular full-state notifications to all subscribers
 
